@@ -1,0 +1,13 @@
+- FieldType.py
+- ClassType.py
+- BuiltinTypes.py
+- ArrayType.py
+
+-----
+- omdrivers\enums\
+- omdrivers\types\
+- omdrivers\lifecycle\idracconfig.py
+- omdrivers\lifecycle\raidhelper.py
+- omdrivers\lifecycle\scpparsers.py
+- omdrivers\idrac.py (partial_entity_json[storage])
+
