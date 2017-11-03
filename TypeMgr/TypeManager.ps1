@@ -45,6 +45,10 @@ class FieldType {
             {
                 $this._value = $arg
             }
+            else
+            {
+                throw [System.Exception], "Updates not allowed for this object"
+            }
         })
         $this._value = $value
         if ($readonly)
