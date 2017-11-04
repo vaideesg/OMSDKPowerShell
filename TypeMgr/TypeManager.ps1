@@ -1,3 +1,24 @@
+#
+#
+# Copyright © 2017 Dell Inc. or its subsidiaries. All rights reserved.
+# Dell, EMC, and other trademarks are trademarks of Dell Inc. or its
+# subsidiaries. Other trademarks may be trademarks of their respective owners.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Authors: Vaideeswaran Ganesan
+#
 # Type Management System
 enum TypeState {
     UnInitialized
@@ -7,41 +28,36 @@ enum TypeState {
     Changing
 }
 
-class FieldType {
-    $_internal = @{
-        '_orig_value' = $null
-        '_default' = $null
-        '_type'  = $null
-        '_alias' = $null
-        '_volatile' = $False
-        '_parent' = $null
-        '_composite' = $False
-        '_index' = 1
-        '_modifyAllowed' = $True
-        '_deleteAllowed' = $True
-        '_rebootRequired' = $False
-        '_default_on_delete' = $null
-        '_list' = $False
-        '_freeze' = $False
-        '_state' = [TypeState]::UnInitialized
-    }
-
+class TypeBase {
+    hidden $_orig_value = $null
+    hidden $_default = $null
+    hidden $_type  = $null
+    hidden $_alias = $null
+    hidden $_volatile = $False
+    hidden $_parent = $null
+    hidden $_composite = $False
+    hidden $_index = 1
+    hidden $_modifyAllowed = $True
+    hidden $_deleteAllowed = $True
+    hidden $_rebootRequired = $False
+    hidden $_default_on_delete = $null
+    hidden $_list = $False
+    hidden $_freeze = $False
+    hidden $_state = [TypeState]::UnInitialized
     hidden $_value
+}
 
-    FieldType($type, $value, $readonly, $rebootRequired)
+class FieldType : TypeBase
+{
+
+    FieldType($type, $value, $properties)
     {
-        $this._init($type, $value, $readonly, $rebootRequired)
-    }
-    FieldType($type, $value)
-    {
-        $this._init($type, $value, $False, $False)
-    }
-    [void] _init($type, $value, $readonly, $rebootRequired)
-    {
-        $this._value = $(Add-Member -InputObject $this -MemberType ScriptProperty -TypeName $type -Name 'value' -Value { $this._value } -SecondValue {
+        $this._value = $(Add-Member -InputObject $this -MemberType ScriptProperty -TypeName $type -Name 'Value' -Value {
+             $this._value
+        } -SecondValue {
             # set
             param ( $arg )
-            if ($this._internal['_modifyAllowed'] -eq $True -or $this._internal['_state'] -eq [TypeState]::UnInitialized)
+            if ($this._modifyAllowed -eq $True -or $this._state -eq [TypeState]::UnInitialized)
             {
                 $this._value = $arg
             }
@@ -50,21 +66,37 @@ class FieldType {
                 throw [System.Exception], "Updates not allowed for this object"
             }
         })
+
         $this._value = $value
-        if ($readonly)
+        if ($properties -eq $null -or $properties.GetType() -ne [Hashtable])
         {
-            $this._internal['_modifyAllowed'] = $False
-            $this._internal['_deleteAllowed'] = $False
+            return
         }
-        if ($rebootRequired)
+
+        if ($properties.ContainsKey('Readonly') -and $properties.Readonly -eq $true)
         {
-            $this._internal['_rebootRequired'] = $True
+            $this._modifyAllowed = $False
+            $this._deleteAllowed = $False
+        }
+        if ($properties.ContainsKey('RebootRequired') -and $properties.RebootRequired -eq $true)
+        {
+            $this._rebootRequired = $True
+        }
+        if ($properties.ContainsKey('IsList') -and $properties.IsList -eq $true)
+        {
+            $this._list = $True
         }
     }
+
     [void] _default($value)
     {
-        $this._internal['_default'] = $value
-        $this._internal['_orig_value'] = $value
+        $this._default = $value
+        $this._orig_value = $value
+    }
+
+    [string] ToString()
+    {
+       return [string]$this.value
     }
 
     [string] Json()
@@ -82,49 +114,49 @@ class FieldType {
        return [string]$this.value
     }
 
-    [bool] commit()
+    [bool] commit($loading_from_scp)
     {
-        $this._internal['_orig_value'] = $this._value
-        $this._internal['_state'] = [TypeState]::Committed
+        $this._orig_value = $this._value
+        $this._state = [TypeState]::Committed
         return $True
     }
 
     [bool] reject()
     {
-        $this.value = $this._internal['_orig_value']
-        if ($this._internal['_orig_value'] -eq $null)
+        $this.value = $this._orig_value
+        if ($this._orig_value -eq $null)
         {
             $this.value = [System.Management.Automation.Language.NullString]::Value
         }
-        $this._internal['_state'] = [TypeState]::Committed
+        $this._state = [TypeState]::Committed
         return $True
     }
 
     [bool] is_changed()
     {
-        if ($this.value -ne $this._internal['_orig_value'])
+        if ($this.value -ne $this._orig_value)
         {
-            if ($this._internal['_state'] -eq [TypeState]::UnInitialized)
+            if ($this._state -eq [TypeState]::UnInitialized)
             {
-                $this._internal['_state'] = [TypeState]::Initializing
+                $this._state = [TypeState]::Initializing
             }
-            elseif ($this._internal['_state'] -eq [TypeState]::Committed)
+            elseif ($this._state -eq [TypeState]::Committed)
             {
-                $this._internal['_state'] = [TypeState]::Changing
+                $this._state = [TypeState]::Changing
             }
         }
         else
         {
-            if ($this._internal['_state'] -eq [TypeState]::Initializing)
+            if ($this._state -eq [TypeState]::Initializing)
             {
-                $this._internal['_state'] = [TypeState]::UnInitialized
+                $this._state = [TypeState]::UnInitialized
             }
-            elseif ($this._internal['_state'] -eq [TypeState]::Changing)
+            elseif ($this._state -eq [TypeState]::Changing)
             {
-                $this._internal['_state'] = [TypeState]::Committed
+                $this._state = [TypeState]::Committed
             }
         }
-        return $this._internal['_state'] -eq [TypeState]::Changing -or $this._internal['_state'] -eq [TypeState]::Initializing
+        return $this._state -eq [TypeState]::Changing -or $this._state -eq [TypeState]::Initializing
     }
 
     [bool] reboot_required()
@@ -132,27 +164,72 @@ class FieldType {
         $retval = $False
         if ($this.is_changed())
         {
-            $retval = $this._internal['_rebootRequired']
+            $retval = $this._rebootRequired
         }
         return $retval
     }
 
     [void] freeze()
     {
-        $this._internal['_freeze'] = $True
+        $this._freeze = $True
     }
     [void] unfreeze()
     {
-        $this._internal['_freeze'] = $False
+        $this._freeze = $False
     }
     [bool] is_frozen()
     {
-        return $this._internal['_freeze']
+        return $this._freeze
     }
 }
 
+class IntField : FieldType {
+    IntField($value, $properties) :
+        base([int], $value, $properties)
+    {
+    }
+}
+
+class StringField : FieldType {
+    StringField($value, $properties) :
+        base([string], $value, $properties)
+    {
+    }
+
+}
+
+class CompositeField : FieldType {
+    hidden [object] $my
+
+    CompositeField($obj, $value, $properties) :
+        base([System.Collections.ArrayList], $value, $properties)
+    {
+        $this.my = $obj
+        $this._composite = $True
+        $this | Add-Member -MemberType ScriptProperty  -Name 'OptimalValue' -Value {
+            $this._optimal()
+        } -SecondValue {
+            throw [System.Exception], "Updates not allowed for this object"
+        }
+    }
+
+    [object[]] _optimal()
+    {
+        print($this.value)
+        $t = [System.Collections.ArrayList]::new()
+        foreach ($i in $this._value.ToArray()) {
+            #write-host ("{0} {1} {2}" -f ($this.my.($i) -eq $null), ($this.my.($i) -eq ""), $this.my($i))
+            if ($this.my.($i).value -eq $null -or $this.my.($i).value -eq "") {
+                continue
+            }
+            $t.Add($this.my.($i).value)
+        }
+        return $t
+    }
+}
 
 class ClassType {
+
     [string] myjson($level)
     {
         $s = [System.IO.StringWriter]::new()
@@ -210,17 +287,17 @@ class ClassType {
         return $this.myjson("")
     }
 
-    [bool] commit()
+    [bool] commit($loading_from_scp)
     {
         $rboot = $False
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
                 continue
             }
-            if ($prop.commit()) {
+            if ($prop.commit($loading_from_scp)) {
                 $rboot = $True
             }
        }
@@ -231,7 +308,7 @@ class ClassType {
         $rboot = $True
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
                 continue
@@ -247,7 +324,7 @@ class ClassType {
         $rboot = $False
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
                 continue
@@ -262,7 +339,7 @@ class ClassType {
         $rboot = $False
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop.GetType() -eq [System.String]) {
                 continue
@@ -277,7 +354,7 @@ class ClassType {
     {
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop.GetType() -eq [System.String]) {
                 continue
@@ -289,7 +366,7 @@ class ClassType {
     {
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop.GetType() -eq [System.String]) {
                 continue
@@ -297,12 +374,17 @@ class ClassType {
             $prop.unfreeze()
        }
     }
+
+    [void] _ignore_fields($name)
+    {
+
+    }
     [bool] is_frozen()
     {
         $rboot = $False
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_internal') { continue }
+            if ($field.Name -eq '_optimal') { continue }
             $prop = $this.($field.Name)
             if ($prop.GetType() -eq [System.String]) {
                 continue
@@ -331,81 +413,91 @@ enum DD {
    False
 }
 
-class BootMode : FieldType {
-    BootMode() :base ([BootModeTypes], [BootModeTypes]::None, $False, $True)
-    {
-    }
-    BootMode([BootModeTypes]$value) :base ([BootModeTypes], $value, $False, $True)
-    {
-    }
-}
-
-class Timezone : FieldType {
-    Timezone() : base([string], 'Asia/Calcutta') {
-
-    }
-    Timezone([string]$value): base([string], $value) {
-    }
-}
-
-class VDName : FieldType {
-    VDName() : base([string], 'Asia/Calcutta', $True, $False){
-    }
-    VDName([string]$value) : base([string], $value, $True, $False) {
-    }
-}
-
 class BIOS : ClassType {
-    [VDName]$VDName
-    BIOS() {
-        $this.VDName = [VDName]::new()
+    [FieldType]$BootMode
+    [FieldType]$BootSeq
+    [FieldType]$MemTest
+
+    BIOS($loading_from_scp)
+    {
+        $this.BootMode = [StringField]::new($null, @{ RebootRequired = $True })
+        $this.BootSeq  = [StringField]::new($null, @{})
+        $this.MemTest   = [StringField]::new($null, @{ Readonly = $True })
     }
 }
+class Time: ClassType {
+    [FieldType]$DayLightOffset_Time
+    [FieldType]$TimeZoneAbbreviation_Time
+    [FieldType]$TimeZoneOffset_Time
+    [FieldType]$Time_Time
+    [FieldType]$Timezone_Time
+    [FieldType]$Timezones
+
+    Time($loading_from_scp)
+    {
+        $this.DayLightOffset_Time = [IntField]::new($null, @{})
+        $this.TimeZoneAbbreviation_Time = [StringField]::new("", @{})
+        $this.TimeZoneOffset_Time = [IntField]::new($null, @{})
+        $this.Time_Time = [IntField]::new($null, @{})
+        $this.Timezone_Time = [StringField]::new("", @{})
+        $this.Timezones = [CompositeField]::new($this, 
+            [System.Collections.ArrayList]('DayLightOffset_Time', 'Time_Time', 'Timezone_Time'), @{})
+        $this._ignore_fields('DaylightOffset_Time')
+        $this._ignore_fields('TimeZone_Time')
+        $this.commit($loading_from_scp)
+    }
+}
+
 class iDRAC : ClassType {
-    [BootMode]$BootMode
-    [Timezone]$Timezone
     #[ValidatePattern("^[01]$")]
     #[string]$ina
-    iDRAC() {
-        $this.BootMode = [BootMode]::new()
-        $this.Timezone = [Timezone]::new()
+    [Time]$Time
+
+    iDRAC($loading_from_scp)
+    {
+        $this.Time = [Time]::new($loading_from_scp)
        #$this.ina = "1"
     }
 }
 class SystemConfiguration : ClassType {
     [BIOS]$BIOS
     [iDRAC]$iDRAC
-    SystemConfiguration() {
-       $this.BIOS = [BIOS]::new()
-       $this.iDRAC = [iDRAC]::new()
+    SystemConfiguration($loading_from_scp) {
+       $this.BIOS = [BIOS]::new($loading_from_scp)
+       $this.iDRAC = [iDRAC]::new($loading_from_scp)
     }
 }
 
-$t = [SystemConfiguration]::new()
-$t.commit()
-$t.BIOS.VDName = "CDT"
-write-host ($t.ModifiedXML())
-write-host($t.BIOS.VDName.value)
-$t.BIOS.VDName.value = "ff"
-write-host $t.BIOS.VDName.is_changed()
-write-host($t.BIOS.VDName.value)
-
+$t = [SystemConfiguration]::new($False)
+$t.iDRAC.Time.DayLightOffset_Time.Value = 20
+$t.iDRAC.Time.Time_Time.Value = 10
+$t.iDRAC.Time.Timezone_Time.Value = 'CDT'
+#write-host ($t.iDRAC.Time.Timezone_Time)
+write-host ($t.iDRAC.Time.Timezones.OptimalValue)
 exit
 
-#write-host ("t.commit() = {0}" -f $t.commit())
-#write-host ($t.ModifiedXML())
-#write-host ("t.is_changed() = {0}" -f $t.is_changed())
-#write-host ("t.reboot_required() = {0}" -f $t.reboot_required())
-#$t.BIOS.Timezone = "CDT"
-#write-host ("t.is_changed() = {0}" -f $t.is_changed())
-#write-host ("t.reboot_required() = {0}" -f $t.reboot_required())
+
+$t.BIOS.MemTest.value = "CDT"
+write-host ("modified XML : {0}" -f $t.ModifiedXML())
+write-host ("MemTest.value = {0} " -f $t.BIOS.MemTest.value)
+$t.commit()
+$t.BIOS.MemTest.value = "ff"
+write-host ("MemTest after setting to ff" -f $t.BIOS.MemTest.is_changed())
+write-host ("MemTest.value = {0} " -f $t.BIOS.MemTest.value)
+write-host ("t.commit() = {0}" -f $t.commit())
+write-host ($t.ModifiedXML())
+write-host ("t.is_changed() = {0}" -f $t.is_changed())
+write-host ("t.reboot_required() = {0}" -f $t.reboot_required())
+$t.iDRAC.Time.Timezone_Time = "CDT"
+write-host ("t.is_changed() = {0}" -f $t.is_changed())
+write-host ("t.reboot_required() = {0}" -f $t.reboot_required())
 write-host ($t.BIOS.is_changed())
 write-host ("t.commit() = {0}" -f $t.commit())
-#$t.BIOS.BootMode = [BootModeTypes]::Uefi
+$t.BIOS.BootMode = [BootModeTypes]::Uefi
 write-host ($t.ModifiedXML())
-#write-host ("t.is_changed() = {0}" -f $t.is_changed())
-#write-host ("t.reboot_required() = {0}" -f $t.reboot_required())
-#write-host ("t.commit() = {0}" -f $t.commit())
+write-host ("t.is_changed() = {0}" -f $t.is_changed())
+write-host ("t.reboot_required() = {0}" -f $t.reboot_required())
+write-host ("t.commit() = {0}" -f $t.commit())
 exit
 
 write-host $t.Json()
