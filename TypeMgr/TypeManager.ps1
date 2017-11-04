@@ -47,24 +47,150 @@ class TypeBase {
     hidden $_value
 }
 
+# TODO
+# 1. _orig_value and _state should not be allowed for modify outside typemgr
+# 2. How to freeze and unfreeze objects for accidental modification?
+# 3. How to not allow deletion of properties? [Powershell does not allow - so it is ok for now]
+# 4. Comparision Operations
+
+
 class FieldType : TypeBase
 {
 
     FieldType($type, $value, $properties)
     {
+        $this._type = $type
         $this._value = $(Add-Member -InputObject $this -MemberType ScriptProperty -TypeName $type -Name 'Value' -Value {
              $this._value
         } -SecondValue {
             # set
-            param ( $arg )
-            if ($this._modifyAllowed -eq $True -or $this._state -eq [TypeState]::UnInitialized)
+            param ( $value )
+            if ($this._modifyAllowed -eq $False -and 
+                @([TypeState]::Committed, [TypeState]::Changing).Contains($this._state))
             {
-                $this._value = $arg
+                throw [System.Exception], "1Updates not allowed to this object"
+            }
+            elseif ($this._composite)
+            {
+                throw [System.Exception], "Composite objects cannot be modified"
+            }
+            elseif ($value -eq $null -and 
+                   @([TypeState]::Committed, [TypeState]::Precommit, [TypeState]::Changing).Contains($this._state))
+            {
+                # noop
+                return 
+            }
+
+            #write-host("this.type={0}, value.type={1}" -f $this.GetType(), $value.GetType())
+            #write-host("value={0}, this._type={1}" -f $value, $this._type)
+            $valid = $False
+            $msg = $null
+            if ($value -eq $null -or $value.GetType() -eq $this._type)
+            {
+                #Write-host ("initial value")
+                $valid = $True
+            }
+            elseif ($this.GetType() -eq $value.GetType())
+            {
+                #Write-host ("same valuetypes")
+                $value = $value.Value
+                $valid = $True
+            }
+            elseif ($value.GetType() -eq [string])
+            {
+                #Write-host ("converting from string")
+                # expected value is int
+                if ($this._type -eq [int])
+                {
+                    $value = [int]$value
+                    $valid = $True
+                }
+                # expected value is bool
+                elseif ($this._type -eq [bool])
+                {
+                    $value = [bool]$value
+                    $valid = $True
+                }
+                # expected value is str
+                elseif ($this._type -eq [string])
+                {
+                    $valid = $True
+                }
+                # expected value is enumeration
+                #elseif TypeHelper.is_enum(self._type):
+                #    newvalue = TypeHelper.convert_to_enum(value, self._type)
+                #    if newvalue is not None:
+                #        value = newvalue
+                #        valid = True
+                #    else:
+                #        msg = str(value) + " is not " + str(self._type)
+                else
+                {
+                    $msg = ("{0} cannot be converted to {1}" -f $value, $this._type)
+                }
             }
             else
             {
-                throw [System.Exception], "Updates not allowed for this object"
+                #Write-host ("no conversion found")
+                $msg = "No type conversion found for '{0}'. Expected {1}, Got {2}" -f $value, $this._type, $value.GetType()
             }
+
+           #write-host('${0}({1}) <> {2}' -f $value.GetType(), $value, $valid)
+           if ($valid -and $this.my_accept_value($value) -eq $False)
+           {
+                $msg = "{0} returned failure for {1}" -f $this.GetType(), $value
+                $valid = $False
+            }
+            # if invalid, raise ValueError exception
+            if ($valid -eq $False)
+            {
+                #ValueError
+                throw [System.Exception], $msg
+            }
+
+            # same value - no change
+            if ($this._value -eq $value)
+            {
+                #write-host("..got same value....")
+                return
+            }
+            # List fields, simply append the new entry!
+            if ($this._list)
+            {
+                if ($this.Value -ne $null -and $this.Value -ne "")
+                {
+                    $value = $this.Value + "," + $value
+                }
+            }
+            # modify the value
+            $this._value = $value
+
+            if (@([TypeState]::UnInitialized, [TypeState]::Precommit, [TypeState]::Initializing).Contains($this._state))
+            {
+                $this._state = [TypeState]::Initializing
+
+            }
+            elseif (@([TypeState]::Committed, [TypeState]::Changing).Contains($this._state))
+            {
+                if ($this._orig_value -eq $this._value)
+                {
+                    $this._state = [TypeState]::Committed
+                }
+                else
+                {
+                    $this._state = [TypeState]::Changing
+                }
+            }
+            else
+            {
+                write-host("Should not come here")
+            }
+
+            if ($this.is_changed() -and $this._parent -ne $null)
+            {
+                $this._parent.child_state_changed($this._state)
+            }
+            #write-host("done.....")
         })
 
         $this._value = $value
@@ -88,12 +214,127 @@ class FieldType : TypeBase
         }
     }
 
-    [void] _default($value)
+    [bool] my_accept_value($value)
     {
-        $this._default = $value
-        $this._orig_value = $value
+        return $true
     }
 
+    [void] set_value($value)
+    {
+        $this.Value = $value
+    }
+
+    [void] nullify_value()
+    {
+        # modify the value
+        $this._value = [System.Management.Automation.Language.NullString]::Value
+
+        if (@([TypeState]::UnInitialized, [TypeState]::Precommit, [TypeState]::Initializing).Contains($this._state))
+        {
+            $this._state = [TypeState]::Initializing
+
+        }
+        elseif (@([TypeState]::Committed, [TypeState]::Changing).Contains($this._state))
+        {
+            if ($this._orig_value -eq $this._value)
+            {
+                $this._state = [TypeState]::Committed
+            }
+            else
+            {
+                $this._state = [TypeState]::Changing
+            }
+        }
+        else
+        {
+            write-host("Should not come here")
+        }
+
+        if ($this.is_changed() -and $this._parent -ne $null)
+        {
+            $this._parent.child_state_changed($this, $this._state)
+        }
+    }
+
+    [void]child_state_changed($obj, $obj_state)
+    {
+    }
+
+    [void]parent_state_changed($new_state)
+    {
+    }
+
+    # State : to Committed
+    # allowed even during freeze
+    [bool] commit()
+    {
+        return $this.commit($False)
+    }
+    [bool] commit($loading_from_scp)
+    {
+        if ($this.is_changed() -or $this._state -eq [TypeState]::Precommit)
+        {
+            if ($this._composite -eq $False)
+            {
+                $this._orig_value = $this._value
+            }
+            if ($loading_from_scp)
+            {
+                $this._state = [TypeState]::Precommit
+            }
+            else
+            {
+                $this._state = [TypeState]::Committed
+            }
+        }
+        return $True
+    }
+
+    # State : to Committed
+    # allowed even during freeze
+    [bool] reject()
+    {
+        if ($this.is_changed())
+        {
+            if ($this._composite -eq $False)
+            {
+                $this.value = $this._orig_value
+                if ($this._orig_value -eq $null)
+                {
+                    $this.value = [System.Management.Automation.Language.NullString]::Value
+                    $this._state = [TypeState]::UnInitialized
+                }
+                else
+                {
+                    $this._state = [TypeState]::Committed
+                }
+            }
+        }
+        return $True
+    }
+
+    [bool] is_changed()
+    {
+        return (@([TypeState]::Initializing, [TypeState]::Changing).Contains($this._state))
+    }
+
+    [bool] reboot_required()
+    {
+        return ($this.is_changed() -and $this._rebootRequired)
+    }
+
+    [void] freeze()
+    {
+        $this._freeze = $True
+    }
+    [void] unfreeze()
+    {
+        $this._freeze = $False
+    }
+    [bool] is_frozen()
+    {
+        return $this._freeze
+    }
     [string] ToString()
     {
        return [string]$this.value
@@ -114,73 +355,6 @@ class FieldType : TypeBase
        return [string]$this.value
     }
 
-    [bool] commit($loading_from_scp)
-    {
-        $this._orig_value = $this._value
-        $this._state = [TypeState]::Committed
-        return $True
-    }
-
-    [bool] reject()
-    {
-        $this.value = $this._orig_value
-        if ($this._orig_value -eq $null)
-        {
-            $this.value = [System.Management.Automation.Language.NullString]::Value
-        }
-        $this._state = [TypeState]::Committed
-        return $True
-    }
-
-    [bool] is_changed()
-    {
-        if ($this.value -ne $this._orig_value)
-        {
-            if ($this._state -eq [TypeState]::UnInitialized)
-            {
-                $this._state = [TypeState]::Initializing
-            }
-            elseif ($this._state -eq [TypeState]::Committed)
-            {
-                $this._state = [TypeState]::Changing
-            }
-        }
-        else
-        {
-            if ($this._state -eq [TypeState]::Initializing)
-            {
-                $this._state = [TypeState]::UnInitialized
-            }
-            elseif ($this._state -eq [TypeState]::Changing)
-            {
-                $this._state = [TypeState]::Committed
-            }
-        }
-        return $this._state -eq [TypeState]::Changing -or $this._state -eq [TypeState]::Initializing
-    }
-
-    [bool] reboot_required()
-    {
-        $retval = $False
-        if ($this.is_changed())
-        {
-            $retval = $this._rebootRequired
-        }
-        return $retval
-    }
-
-    [void] freeze()
-    {
-        $this._freeze = $True
-    }
-    [void] unfreeze()
-    {
-        $this._freeze = $False
-    }
-    [bool] is_frozen()
-    {
-        return $this._freeze
-    }
 }
 
 class IntField : FieldType {
@@ -209,7 +383,7 @@ class CompositeField : FieldType {
         $this | Add-Member -MemberType ScriptProperty  -Name 'OptimalValue' -Value {
             $this._optimal()
         } -SecondValue {
-            throw [System.Exception], "Updates not allowed for this object"
+            throw [System.Exception], "Composite objects cannot be modified"
         }
     }
 
@@ -468,12 +642,30 @@ class SystemConfiguration : ClassType {
     }
 }
 
+try {
 $t = [SystemConfiguration]::new($False)
-$t.iDRAC.Time.DayLightOffset_Time.Value = 20
-$t.iDRAC.Time.Time_Time.Value = 10
+$t1 = [IntField]::new(40, @{})
+$t.iDRAC.Time.DayLightOffset_Time.Value = $t1
+$t.iDRAC.Time.Time_Time.Value = "10"
 $t.iDRAC.Time.Timezone_Time.Value = 'CDT'
 #write-host ($t.iDRAC.Time.Timezone_Time)
 write-host ($t.iDRAC.Time.Timezones.OptimalValue)
+}
+catch 
+{
+    $ex = $_.Exception
+    $orig_ex = $ex
+    while ($ex -ne $null)
+    {
+        write-host ($ex.Message)
+        write-host ($ex.ErrorRecord.InvocationInfo.PositionMessage)
+        $ex = $ex.InnerException
+        if ($ex -ne $null)
+        {
+            write-host("Inner Exception Details:")
+        }
+    }
+}
 exit
 
 
