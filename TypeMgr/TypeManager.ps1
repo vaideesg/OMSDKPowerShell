@@ -45,17 +45,22 @@ class TypeBase {
     hidden $_freeze = $False
     hidden $_state = [TypeState]::UnInitialized
     hidden $_value
+
+    [bool] my_accept_value($value)
+    {
+        return $true
+    }
 }
 
-# TODO
-# 1. _orig_value and _state should not be allowed for modify outside typemgr
-# 2. How to freeze and unfreeze objects for accidental modification?
-# 3. How to not allow deletion of properties? [Powershell does not allow - so it is ok for now]
-# 4. Comparision Operations - [Workaround: Added __op__ APIs]
 
 
 class FieldType : TypeBase
 {
+    # FieldType:: TODO
+    # 1. _orig_value and _state should not be allowed for modify outside typemgr
+    # 2. How to freeze and unfreeze objects for accidental modification?
+    # 3. How to not allow deletion of properties? [Powershell does not allow - so it is ok for now]
+    # 4. Comparision Operations - [Workaround: Added __op__ APIs]
 
     FieldType($type, $value, $properties)
     {
@@ -223,11 +228,6 @@ class FieldType : TypeBase
     }
 
 
-    [bool] my_accept_value($value)
-    {
-        return $true
-    }
-
     [void] set_value($value)
     {
         $this.Value = $value
@@ -324,7 +324,7 @@ class FieldType : TypeBase
 
     [bool] is_changed()
     {
-        return (@([TypeState]::Initializing, [TypeState]::Changing).Contains($this._state))
+        return $this._state -in @([TypeState]::Initializing, [TypeState]::Changing)
     }
 
     [bool] reboot_required()
@@ -808,6 +808,38 @@ class CompositeField : FieldType {
 
 class ClassType : TypeBase {
 
+    # ClassType:: TODO
+    # 1. _state should not be allowed for modify outside typemgr
+    # 2. How to freeze and unfreeze objects for accidental modification?
+    # 3. Comparision Operations - [Workaround: Added __op__ APIs]
+    hidden $_attribs
+    hidden $_ign_attribs
+    hidden $_ign_fields
+
+    [void] _ignore_fields($fields)
+    {
+        $this._ign_fields = $fields
+    }
+
+    [void] _ignore_attribs($attribs)
+    {
+        $this._ign_attribs = $attribs
+    }
+
+    [bool] is_changed()
+    {
+        #$rboot = $False
+        #foreach ($field in Get-Member -InputObject $this -MemberType Property)
+        #{
+            #if ($field.Name.StartsWith('_')) { continue }
+            #$prop = $this.($field.Name)
+            #if ($prop -ne $null -and $prop.GetType() -ne [System.String] -and $prop.is_changed()) {
+            #    return $True
+            #}
+        #}
+        return $this._state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
+    }
+
     [string] myjson($level)
     {
         $s = [System.IO.StringWriter]::new()
@@ -865,6 +897,24 @@ class ClassType : TypeBase {
         return $this.myjson("")
     }
 
+    [bool] commit()
+    {
+        return $this.commit($False)
+    }
+
+    #TODO copy_state
+    [void] _copy_state($source, $dest)
+    {
+    }
+
+    #TODO values_changed
+    [bool] values_changed($source, $dest)
+    {
+
+        return $True
+    }
+
+    # TODO _orig_value manipulation
     [bool] commit($loading_from_scp)
     {
         $rboot = $False
@@ -882,6 +932,7 @@ class ClassType : TypeBase {
        return $rboot
     }
 
+    # TODO _orig_value manipulation
     [bool] reject() {
         $rboot = $True
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
@@ -897,82 +948,79 @@ class ClassType : TypeBase {
        }
        return $rboot
     }
-    [bool] is_changed()
+
+    # TODO 
+    [void]child_state_changed($obj, $obj_state)
     {
-        $rboot = $False
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
-        {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
-                continue
-            }
-            if ($prop.is_changed()) {
-                return $True
-            }
-       }
-       return $rboot
     }
-    [bool] reboot_required() {
-        $rboot = $False
+
+    # TODO 
+    [void]parent_state_changed($new_state)
+    {
+    }
+
+    [System.Collections.ArrayList] Properties()
+    {
+        $ret = [System.Collections.ArrayList]::new()
         foreach ($field in Get-Member -InputObject $this -MemberType Property)
         {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop.GetType() -eq [System.String]) {
-                continue
-            }
+            if ($field.Name.StartsWith('_')) { continue }
+            $ret.Add($field)
+       }
+       return $ret
+    }
+
+    [bool] reboot_required() 
+    {
+        foreach ($prop in $this.Properties())
+        {
             if ($prop.reboot_required()) {
                 return $True
             }
        }
-       return $rboot
+       return $False
     }
     [void] freeze()
     {
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
+        $this._freeze = $True
+        foreach ($prop in $this.Properties())
         {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop.GetType() -eq [System.String]) {
-                continue
-            }
             $prop.freeze()
        }
     }
     [void] unfreeze()
     {
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
+        $this._freeze = $False
+        foreach ($prop in $this.Properties())
         {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop.GetType() -eq [System.String]) {
-                continue
-            }
             $prop.unfreeze()
        }
     }
 
-    [void] _ignore_fields($name)
-    {
-
-    }
     [bool] is_frozen()
     {
-        $rboot = $False
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
-        {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop.GetType() -eq [System.String]) {
-                continue
-            }
-            if ($prop.is_frozen()) {
-                return $True
-            }
-       }
-       return $rboot
+        return $this._freeze
     }
+
+    # TODO
+    [void] _set_index($index)
+    {
+    }
+
+    # TODO
+    [TypeBase] get_root()
+    {
+        return $this
+    }
+
+    # TODO
+    [void] add_attribute($name, $value)
+    {
+        $this._attribs[$name] = $value
+    }
+
+    #TODO
+    # compare operators, _get_combined_properties()
 }
 
 class RootClassType : ClassType {
