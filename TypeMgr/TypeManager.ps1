@@ -218,6 +218,8 @@ class FieldType : TypeBase
         {
             $this._list = $True
         }
+
+        
     }
 
 
@@ -234,7 +236,7 @@ class FieldType : TypeBase
     [void] nullify_value()
     {
         # modify the value
-        $this._value = [System.Management.Automation.Language.NullString]::Value
+        $this._value = $null
 
         if (@([TypeState]::UnInitialized, [TypeState]::Precommit, [TypeState]::Initializing).Contains($this._state))
         {
@@ -557,6 +559,10 @@ class FieldType : TypeBase
         return ($this.__eq__($other) -eq $False)
     }
 
+    [FieldType] clone($value)
+    {
+        return [FieldType]::new($this._type, $this.Value, @{ Readonly = $this._modifyAllowed; RebootRequired = $this._reboot_required; IsList = $this._list }) 
+    }
 }
 
 class IntField : FieldType {
@@ -566,13 +572,207 @@ class IntField : FieldType {
     }
 }
 
+class BooleanField : FieldType {
+    BooleanField($value, $properties) :
+        base([bool], $value, $properties)
+    {
+    }
+}
+
+class ListField : FieldType {
+    ListField($value, $properties) :
+        base([string], $value, $properties)
+    {
+        $this._list = $True
+    }
+}
+
+class IntRangeField : IntField {
+    hidden [int]$max
+    hidden [int]$min
+    IntRangeField($value, $properties) :
+        base($value, $properties)
+    {
+        $this.min = $properties.Min
+        if ($properties.Min -eq $null)
+        {
+            $this.min = [int]::MinValue
+        }
+        else
+        {
+            $this.min = [int]$properties.min
+        }
+        $this.max = $properties.Max
+        if ($properties.Max -eq $null)
+        {
+            $this.max = [int]::MaxValue
+        }
+        else
+        {
+            $this.max = [int]$properties.max
+        }
+    }
+
+    [bool] my_accept_value($value)
+    {
+        if ($this.min -eq $null -and $this.max -eq $null)
+        {
+            return $True
+        }
+        if ($value -eq $null -or $value -eq '')
+        {
+            return $True
+        }
+        if ($value.GetType() -ne [int] -or 
+            ($value -lt $this.min -or $value -gt $this.max))
+        {
+            throw [System.Exception], "{0} should be in range [{1}, {2}]" -f $value, $this.min, $this.max
+        }
+        return $True
+    }
+}
+
+class PortField : IntField {
+    PortField($value, $properties) :
+        base($value, $properties)
+    {
+    }
+
+    [bool] my_accept_value($value)
+    {
+        if ($value -eq $null -or $value -eq '')
+        {
+            return $True
+        }
+        if ($value.GetType() -ne [int] -or $value -le 0)
+        {
+            throw [System.Exception], "{0} should be an integer > 0" -f $value
+        }
+        return $True
+    }
+}
+
 class StringField : FieldType {
     StringField($value, $properties) :
         base([string], $value, $properties)
     {
     }
+}
+
+enum AddressTypes {
+    IPv4Address
+    IPv6Address
+    IPAddress
+    MACAddress
+    WWPNAddress
+}
+
+class AddressHelpers
+{
+    static [bool] CheckAddress($value, $address_type)
+    {
+        $match_regex = @()
+        if ($address_type -in @([AddressTypes]::IPv4Address, [AddressTypes]::IPAddress))
+        {
+            $match_regex += @('^\d+([.]\d+){3}$')
+        }
+        elseif ($address_type -in @([AddressTypes]::IPv6Address, [AddressTypes]::IPAddress))
+        {
+            $match_regex += @('^[A-Fa-f0-9:]+$')
+        }
+        elseif ($address_type -in @([AddressTypes]::MACAddress))
+        {
+            $match_regex += @('^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$')
+        }
+        elseif ($address_type -in @([AddressTypes]::WWPNAddress))
+        {
+            $match_regex += @('^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){7}$')
+        }
+        if ($value -eq $null -or $value -eq '')
+        {
+            return $True
+        }
+
+        if ($value.GetType() -ne [string])
+        {
+            return $False
+        }
+
+        foreach ($pattern in $match_regex)
+        {
+            if ($value -notmatch $pattern)
+            {
+                return $False
+            }
+        }
+
+        if ($address_type -in @([AddressTypes]::IPv4Address, [AddressTypes]::IPAddress) -and $value.Contains(':') -eq $False)
+        {
+            foreach ($n in $value.split('.'))
+            {
+                if ([int]$n -gt 255)
+                {
+                    return $False
+                }
+            }
+        }
+        return $True
+    }
+}
+
+class AddressTypeField : FieldType {
+    hidden $type
+    AddressTypeField($type, $value, $properties) :
+        base([string], $value, $properties)
+    {
+        $this.type = $type
+    }
+    [bool] my_accept_value($value)
+    {
+        return [AddressHelpers]::CheckAddress($value, $this.type)
+    }
 
 }
+
+class IPv4AddressField : AddressTypeField {
+    IPv4AddressField($value, $properties) :
+        base([AddressTypes]::IPv4Address, $value, $properties)
+    {
+    }
+}
+class IPAddressField : AddressTypeField {
+    IPAddressField($value, $properties) :
+        base([AddressTypes]::IPAddress, $value, $properties)
+    {
+    }
+}
+class MacAddressField : AddressTypeField {
+    MacAddressField($value, $properties) :
+        base([AddressTypes]::MACAddress, $value, $properties)
+    {
+    }
+}
+class WWPNAddressField : AddressTypeField {
+    WWPNAddressField($value, $properties) :
+        base([AddressTypes]::WWPNAddress, $value, $properties)
+    {
+    }
+}
+class IPv6AddressField : AddressTypeField {
+    IPv6AddressField($value, $properties) :
+        base([string], [AddressTypes]::IPv6Address, $value, $properties)
+    {
+    }
+}
+
+
+# TODO
+#class EnumTypeField : FieldType {
+#    EnumTypeField($value, $properties) :
+#        base([string], $value, $properties)
+#    {
+#    }
+#}
 
 class CompositeField : FieldType {
     hidden [object] $my
@@ -605,7 +805,8 @@ class CompositeField : FieldType {
     }
 }
 
-class ClassType {
+
+class ClassType : TypeBase {
 
     [string] myjson($level)
     {
@@ -772,6 +973,9 @@ class ClassType {
        }
        return $rboot
     }
+}
+
+class RootClassType : ClassType {
 }
 
 
