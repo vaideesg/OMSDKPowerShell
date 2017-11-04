@@ -51,7 +51,7 @@ class TypeBase {
 # 1. _orig_value and _state should not be allowed for modify outside typemgr
 # 2. How to freeze and unfreeze objects for accidental modification?
 # 3. How to not allow deletion of properties? [Powershell does not allow - so it is ok for now]
-# 4. Comparision Operations
+# 4. Comparision Operations - [Workaround: Added __op__ APIs]
 
 
 class FieldType : TypeBase
@@ -119,9 +119,9 @@ class FieldType : TypeBase
                 # expected value is enumeration
                 #elseif TypeHelper.is_enum(self._type):
                 #    newvalue = TypeHelper.convert_to_enum(value, self._type)
-                #    if newvalue is not None:
+                #    if ($newvalue -ne $null)
                 #        value = newvalue
-                #        valid = True
+                #        valid = $True
                 #    else:
                 #        msg = str(value) + " is not " + str(self._type)
                 else
@@ -194,6 +194,12 @@ class FieldType : TypeBase
         })
 
         $this._value = $value
+        $this | Add-Member -MemberType ScriptProperty  -Name 'OptimalValue' -Value {
+            $this.Value
+        } -SecondValue {
+            throw [System.Exception], "Use Value property to modify"
+        }
+
         if ($properties -eq $null -or $properties.GetType() -ne [Hashtable])
         {
             return
@@ -213,6 +219,7 @@ class FieldType : TypeBase
             $this._list = $True
         }
     }
+
 
     [bool] my_accept_value($value)
     {
@@ -355,6 +362,201 @@ class FieldType : TypeBase
        return [string]$this.value
     }
 
+    # Compare APIs:
+    [bool] __lt__($other)
+    {
+        if ($this._state -eq [TypeState]::UnInitialized)
+        {
+            return $False
+        }
+        if ($other -eq $null)
+        {
+            return $False
+        }
+        $myvalue = $this.Value
+        if ($other.GetType() -eq $this.GetType())
+        {
+            $othervalue = $other.Value
+        }
+        elseif ($other.GetType() -eq $this._type)
+        {
+            $othervalue = $other
+        }
+        else
+        {
+            throw [System.Exception], 'cannot compare with {0}' -f $other.GetType()
+        }
+        if ($myvalue -eq $null -and $othervalue -ne $null)
+        {
+            return $true
+        }
+        if ($myvalue -eq $null -and $othervalue -eq $null)
+        {
+            return $False
+        }
+        return $myvalue -lt $othervalue
+    }
+
+    # Compare APIs:
+    [bool] __le__($other)
+    {
+        if ($this._state -eq [TypeState]::UnInitialized)
+        {
+            return $False
+        }
+        if ($this.Value -eq $null -and $other -eq $null)
+        {
+            return $True
+        }
+        if ($this.Value -ne $null -and $other -eq $null)
+        {
+            return $False
+        }
+        $myvalue = $this.Value
+        if ($other.GetType() -eq $this.GetType())
+        {
+            $othervalue = $other.Value
+        }
+        elseif ($other.GetType() -eq $this._type)
+        {
+            $othervalue = $other
+        }
+        else
+        {
+            throw [System.Exception], 'cannot compare with {0}' -f $other.GetType()
+        }
+        if ($myvalue -ne $null -and $othervalue -eq $null)
+        {
+            return $False
+        }
+        if ($myvalue -eq $null -and $othervalue -ne $null)
+        {
+            return $True
+        }
+        return $myvalue -le $othervalue
+    }
+    
+
+    # Compare APIs:
+    [bool] __gt__($other)
+    {
+        if ($this._state -eq [TypeState]::UnInitialized)
+        {
+            return $False
+        }
+        if ($this.Value -eq $null)
+        {
+            return $False
+        }
+        if ($this.Value -ne $null -and $other -eq $null)
+        {
+            return $True
+        }
+        $myvalue = $this.Value
+        if ($other.GetType() -eq $this.GetType())
+        {
+            $othervalue = $other.Value
+        }
+        elseif ($other.GetType() -eq $this._type)
+        {
+            $othervalue = $other
+        }
+        else
+        {
+            throw [System.Exception], 'cannot compare with {0}' -f $other.GetType()
+        }
+        if ($myvalue -ne $null -and $othervalue -eq $null)
+        {
+            return $True
+        }
+        return $myvalue > $othervalue
+    }
+
+    # Compare APIs:
+    [bool] __ge__($other)
+    {
+        if ($this._state -eq [TypeState]::UnInitialized)
+        {
+            return $False
+        }
+        if ($this.Value -eq $null -and $other -eq $null)
+        {
+            return $True
+        }
+        if ($this.Value -ne $null -and $other -eq $null)
+        {
+            return $True
+        }
+        $myvalue = $this.Value
+        if ($other.GetType() -eq $this.GetType())
+        {
+            $othervalue = $other.Value
+        }
+        elseif ($other.GetType() -eq $this._type)
+        {
+            $othervalue = $other
+        }
+        else
+        {
+            throw [System.Exception], 'cannot compare with {0}' -f $other.GetType()
+        }
+        if ($myvalue -eq $null -and $othervalue -eq $null)
+        {
+            return $True
+        }
+        if ($myvalue -eq $null -and $othervalue -ne $null)
+        {
+            return $False
+        }
+        return $myvalue -ge $othervalue
+    }
+
+    # Don't allow comparision with string ==> becomes too generic
+    # Compare APIs:
+    [bool] __eq__($other)
+    {
+        if ($this._state -eq [TypeState]::UnInitialized)
+        {
+            return $False
+        }
+        if ($this.Value -eq $null -and $other -eq $null)
+        {
+            return $True
+        }
+        if ($this.Value -ne $null -and $other -eq $null)
+        {
+            return $False
+        }
+        $myvalue = $this.Value
+        if ($other.GetType() -eq $this.GetType())
+        {
+            $othervalue = $other.Value
+        }
+        elseif ($other.GetType() -eq $this._type)
+        {
+            $othervalue = $other
+        }
+        else
+        {
+            throw [System.Exception], 'cannot compare with {0}' -f $other.GetType()
+        }
+        if ($myvalue -eq $null -and $othervalue -eq $null)
+        {
+            return $True
+        }
+        if ($myvalue -eq $null -and $othervalue -ne $null)
+        {
+            return $True
+        }
+        return $myvalue -eq $othervalue
+
+    }
+    # Compare APIs:
+    [bool] __ne__($other)
+    {
+        return ($this.__eq__($other) -eq $False)
+    }
+
 }
 
 class IntField : FieldType {
@@ -384,19 +586,20 @@ class CompositeField : FieldType {
             $this._optimal()
         } -SecondValue {
             throw [System.Exception], "Composite objects cannot be modified"
-        }
+        } -Force
     }
 
     [object[]] _optimal()
     {
-        print($this.value)
         $t = [System.Collections.ArrayList]::new()
+        
         foreach ($i in $this._value.ToArray()) {
-            #write-host ("{0} {1} {2}" -f ($this.my.($i) -eq $null), ($this.my.($i) -eq ""), $this.my($i))
-            if ($this.my.($i).value -eq $null -or $this.my.($i).value -eq "") {
-                continue
+            $val = $this.my.($i).Value
+            #write-host ("{0} {1} {2}" -f ($val -eq $null), ($val -eq ""), $val)
+            if ($val -ne $null -and $val -ne "") 
+            {
+                $t.Add($val)
             }
-            $t.Add($this.my.($i).value)
         }
         return $t
     }
@@ -579,12 +782,8 @@ enum BootModeTypes{
    None
 }
 enum RebootType {
-   True
-   False
 }
 enum DD {
-   True
-   False
 }
 
 class BIOS : ClassType {
