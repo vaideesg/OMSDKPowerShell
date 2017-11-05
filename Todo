@@ -1,8 +1,10 @@
-- FieldType.py
-- ClassType.py
-- BuiltinTypes.py
-- ArrayType.py
+[Done] FieldType.py
+[Done] BuiltinTypes.py
+[50% ]- ClassType.py
+[    ] - ArrayType.py
 
+-----
+- omsdk\sdkcenum
 -----
 - omdrivers\enums\
 - omdrivers\types\
@@ -10,4 +12,13 @@
 - omdrivers\lifecycle\raidhelper.py
 - omdrivers\lifecycle\scpparsers.py
 - omdrivers\idrac.py (partial_entity_json[storage])
+
+$idrac = New-iDRAC-Session -Host <ip> -Creds <creds> -LiasonShare <ls_share>
+$idrac.SystemConfiguration.iDRAC.Time.TimeZone_Time = 'CDT'
+$idrac.SystemConfiguration.reject()
+$idrac.RaidHelper.new(.....)
+Apply-iDRAC-Session -session $idrac
+
+Export-iDRAC-ServerConfiguration -session $iDRAC -Share <ls_share>
+Import-iDRAC-ServerConfiguration -session $iDRAC -Share <ls_share>
 

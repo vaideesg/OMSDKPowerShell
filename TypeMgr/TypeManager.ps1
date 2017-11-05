@@ -52,7 +52,40 @@ class TypeBase {
     }
 }
 
+class EnumType
+{
+    hidden [string]$Name
+    EnumType($name, $properties)
+    {
+        foreach ($prop in $properties.Keys)
+        {
+            Add-Member -InputObject $this -MemberType NoteProperty -Name $prop -Value $properties[$prop] 
+        }
+        $this.Name = $name
+    }
 
+    [string] ToString()
+    {
+        return $this.Name
+    }
+}
+
+class TypeHelper
+{
+    static [bool] is_enum($type)
+    {
+        return ($type -eq [EnumType])
+    }
+
+    static [object] convert_to_enum($value, $type, $enumtype)
+    {
+        if ( ($enumtype | Get-Member -MemberType NoteProperty | Where { $enumtype.($_.Name) -eq $value }) -eq $null)
+        {
+            $value = $null
+        }
+        return $value
+    }
+}
 
 class FieldType : TypeBase
 {
@@ -103,7 +136,7 @@ class FieldType : TypeBase
             }
             elseif ($value.GetType() -eq [string])
             {
-                #Write-host ("converting from string")
+                #Write-host ("converting from string to {0}" -f $this._type)
                 # expected value is int
                 if ($this._type -eq [int])
                 {
@@ -122,13 +155,19 @@ class FieldType : TypeBase
                     $valid = $True
                 }
                 # expected value is enumeration
-                #elseif TypeHelper.is_enum(self._type):
-                #    newvalue = TypeHelper.convert_to_enum(value, self._type)
-                #    if ($newvalue -ne $null)
-                #        value = newvalue
-                #        valid = $True
-                #    else:
-                #        msg = str(value) + " is not " + str(self._type)
+                elseif ([TypeHelper]::is_enum($this._type))
+                {
+                    $newvalue = [TypeHelper]::convert_to_enum($value, $this._type, $this.enumtype)
+                    if ($newvalue -ne $null)
+                    {
+                        $value = $newvalue
+                        $valid = $True
+                    }
+                    else
+                    {
+                        $msg = "{0} is not {1}" -f $value, $this._type
+                    }
+                }
                 else
                 {
                     $msg = ("{0} cannot be converted to {1}" -f $value, $this._type)
@@ -766,13 +805,19 @@ class IPv6AddressField : AddressTypeField {
 }
 
 
-# TODO
-#class EnumTypeField : FieldType {
-#    EnumTypeField($value, $properties) :
-#        base([string], $value, $properties)
-#    {
-#    }
-#}
+class EnumTypeField : FieldType {
+    hidden $enumType
+    EnumTypeField($enumType, $value, $properties) :
+        base([EnumType], $value, $properties)
+    {
+        $this.enumType = $enumType
+    }
+
+    [string] ToString()
+    {
+        return $this.enumType.Name
+    }
+}
 
 class CompositeField : FieldType {
     hidden [object] $my
@@ -1028,15 +1073,9 @@ class RootClassType : ClassType {
 
 
 # Generated Code
-enum BootModeTypes{
-   Uefi
-   Bios
-   None
-}
-enum RebootType {
-}
-enum DD {
-}
+$BootModeTypes = [EnumType]::new('BootModeTypes', @{ Uefi = "Uefi"; Bios = "Bios"; None = "None" })
+$Levels = [EnumType]::new('Levels', @{ Administrator = "511"; Operator = "411"; User = "1" })
+
 
 class BIOS : ClassType {
     [FieldType]$BootMode
@@ -1045,7 +1084,7 @@ class BIOS : ClassType {
 
     BIOS($loading_from_scp)
     {
-        $this.BootMode = [StringField]::new($null, @{ RebootRequired = $True })
+        $this.BootMode = [EnumTypeField]::new($Global:BootModeTypes, $null, @{ RebootRequired = $True })
         $this.BootSeq  = [StringField]::new($null, @{})
         $this.MemTest   = [StringField]::new($null, @{ Readonly = $True })
     }
@@ -1096,6 +1135,7 @@ class SystemConfiguration : ClassType {
 try {
 $t = [SystemConfiguration]::new($False)
 $t1 = [IntField]::new(40, @{})
+$t.BIOS.BootMode.Value = 'Bios'
 $t.iDRAC.Time.DayLightOffset_Time.Value = $t1
 $t.iDRAC.Time.Time_Time.Value = "10"
 $t.iDRAC.Time.Timezone_Time.Value = 'CDT'
