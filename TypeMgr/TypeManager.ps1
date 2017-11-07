@@ -262,10 +262,7 @@ class FieldType : TypeBase
         {
             $this._list = $True
         }
-
-        
     }
-
 
     [void] set_value($value)
     {
@@ -1752,15 +1749,12 @@ class ArrayType : TypeBase
             return $False
         }
         $criteria = $criteria.Replace('.parent', '._parent._parent')
-        $criteria = $criteria -replace '([a-zA-Z0-9_.]+)\s+is\s+([^ \t]+)', '(type(\\1).__name__ == "\\2")'
+        $criteria = $criteria -replace '([a-zA-Z0-9_.]+)\s+is\s+([^ \t]+)', '(${1}.GetType().Name == "${2}")'
         write-host("Evaluating: " + $criteria)
-        return eval($criteria)
+        return Invoke-Expression ($criteria)
     }
 
 }
-
-### DONE
-
 
 
 # Generated Code
