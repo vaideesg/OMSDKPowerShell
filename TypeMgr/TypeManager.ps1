@@ -1072,6 +1072,697 @@ class RootClassType : ClassType {
 }
 
 
+class IndexHelper
+{
+    hidden [int]$min_value
+    hidden [int]$max_value
+    hidden [System.Collections.ArrayList]$indexes_free
+    hidden [System.Collections.ArrayList] $reserve
+    IndexHelper($min_value, $max_value)
+    {
+        $this.min_value = $min_value
+        $this.max_value = $max_value
+        $this.indexes_free = [System.Collections.ArrayList]::new()
+        $this.indexes_free.AddRange($this.min_value..$this.max_value)
+        $this.reserve = [System.Collections.ArrayList]::new()
+    }
+
+    [object] next_index()
+    {
+        if ($this.indexes_free.Length -gt 0)
+        {
+            $index = $this.indexes_free[0]
+            $this.indexes_free.Remove($index)
+            return $index
+        }
+        throw [System.Exception], 'ran out of all entries'
+    }
+
+    [void] unusable($index)
+    {
+        if ($index -in $this.indexes_free)
+        {
+            $this.indexes_free.Remove($index)
+            $this.reserve.Add($index)
+        }
+    }
+
+    [void] remove($index)
+    {
+        if ($index -in $this.indexes_free)
+        {
+            $this.indexes_free.Remove($index)
+        }
+    }
+
+    [void] restore_index($index)
+    {
+        if  ($index -notin $this.reserve -and $index -notin $this.indexes_free)
+        {
+            $this.indexes_free.Add($index)
+            $this.indexes_free = ($this.indexes_free | sort)
+        }
+    }
+
+    [bool] has_indexes()
+    {
+        return $this.indexes_free.Length -gt 0
+    }
+
+}
+
+class FQDDHelper : IndexHelper
+{
+    FQDDHelper() : base(1, 30) {}
+}
+
+class ArrayType : TypeBase
+{
+    hidden [System.Collections.ArrayList]$_entries
+    hidden $_fname
+    hidden $_keys
+    hidden $_cls
+    hidden $_index_helper
+    hidden $_loading_from_scp
+
+    ArrayType($clsname) 
+    {
+        $this._init($clsname, $null, $null, $False)
+    }
+
+    ArrayType($clsname, $parent, $index_helper, $loading_from_scp)
+    {
+        $this._init($clsname, $parent, $index_helper, $loading_from_scp)
+    }
+    [void] _init($clsname, $parent, $index_helper, $loading_from_scp)
+    {
+        $this._fname = $clsname.Name
+        $this._parent = $parent
+        $this._loading_from_scp = $loading_from_scp
+        if ($index_helper -eq $null)
+        {
+            $index_helper = [IndexHelper]::new(1, 20)
+        }
+        $this._index_helper = $index_helper
+        $this._cls = $clsname
+        $this._entries = [System.Collections.ArrayList]::new()
+        $this._keys = @{}
+        # Special case for Array. Empty Array is still valid
+        $this._orig_value = [System.Collections.ArrayList]::new()
+        $this._state = [TypeState]::Committed
+    }
+
+
+
+    [int] Length()
+    {
+        return $this._entries.Length
+    }
+
+    [bool] _copy_state($source, $dest)
+    {
+        # from _entries to _orig_entries
+        $toadd = [System.Collections.ArrayList]::new()
+        foreach ($i in $source)
+        {
+            if ($i -notin $dest)
+            {
+                $toadd.Add($i)
+            }
+        }
+
+        $toremove = [System.Collections.ArrayList]::new()
+        foreach ($i in $dest)
+        {
+            if ($i -notin $source)
+            {
+                $toremove.Add($i)
+            }
+        }
+
+        foreach ($i in $toremove)
+        {
+            $dest.remove($i)
+        }
+
+        foreach ($i in $toadd)
+        {
+            $dest.Add($i)
+        }
+
+        return $True
+    }
+
+    [object] _get_key($entry)
+    {
+        if ($this.hasattr($entry, 'Key'))
+        {
+            $key = $entry.Key._value
+            if ($key -ne $null) { $key = $key.ToString() }
+            return $key
+        }
+        else
+        {
+            return $entry._index
+        }
+    }
+
+    [bool] _values_changed($source, $dest)
+    {
+        $source_idx = [System.Collections.ArrayList]::new()
+        foreach ($entry in $source)
+        {
+            $source_idx.append($this._get_key($entry))
+        }
+        foreach ($entry in $dest)
+        {
+            if ($this._get_key($entry) -notin $source_idx)
+            {
+                return $False
+            }
+            $source_idx.remove($this._get_key($entry))
+        }
+        return ($source_idx.Length -le 0)
+    }
+
+    [System.Collections.ArrayList] values_deleted()
+    {
+        $source_idx = [System.Collections.ArrayList]::new()
+        $dest_entries = [System.Collections.ArrayList]::new()
+        foreach ($entry in $this._entries)
+        {
+            $source_idx.Add($this._get_key($entry))
+        }
+        foreach ($entry in $this._orig_value)
+        {
+            $key = $this._get_key($entry)
+            if ($key -notin $source_idx)
+            {
+                $dest_entries.append($entry)
+                continue
+            }
+            $source_idx.remove($key)
+        }
+        return $dest_entries
+    }
+
+    # State : to Committed
+    # allowed even during freeze
+    [bool] commit()
+    {
+        return $this.commit($False)
+    }
+
+    [bool] commit($loading_from_scp)
+    {
+        if ($this.is_changed())
+        {
+            if ($this._composite)
+            {
+                $this._copy_state($this._entries, $this._orig_value)
+                #$this._orig_value = sorted($this.__dict__['_orig_value'], key = lambda entry: entry._index)
+                foreach ($entry in $this._entries)
+                {
+                    $entry.commit($loading_from_scp)
+                }
+            }
+            if ($loading_from_scp)
+            {
+                $this._state = [TypeState]::Precommit
+            }
+            else
+            {
+                $this._state = [TypeState]::Committed
+            }
+        }
+        return $true
+    }
+
+    # State : to Committed
+    # allowed even during freeze
+    [bool] reject()
+    {
+        if ($this.is_changed())
+        {
+            if (-not $this._composite)
+            {
+                $this._copy_state($this._orig_value, $this._entries)
+                foreach ($entry in $this._entries)
+                {
+                    $entry.reject()
+                    $this._index_helper.restore_index($entry._index)
+                }
+                foreach ($i in $this._entries)
+                {
+                    $this._keys[$this._get_key($i)] = $i
+                }
+                $this._state = [TypeState]::Committed
+            }
+        }
+        return $True
+    }
+
+    # Does not have children - so not implemented
+    [void] child_state_changed($child, $child_state)
+    {
+
+        if ($child_state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing))
+        {
+            if ($this._state -eq [TypeState]::UnInitialized)
+            {
+                $this._state = [TypeState]::Initializing
+            }
+            elseif ($this._state -eq [TypeState]::Committed)
+            {
+                $this._state = [TypeState]::Changing
+            }
+        }
+        if ($this.is_changed() -and $this._parent -ne $null)
+        {
+            $this._parent.child_state_changed($this, $this._state)
+        }
+    }
+
+    # what to do?
+    [void] parent_state_changed($new_state)
+    {
+        
+    }
+    # Object APIs
+    [bool] copy($other)
+    {
+        if ($other -eq $null -or $other.GetType() -ne $this)
+        {
+            return $False
+        }
+        foreach ($i in $other._entries)
+        {
+            if ($i -notin $this._entries)
+            {
+                $this._entries[$i] = $other._entries[$i].clone($this)
+            }
+            elseif (-not $this._entries[$i]._volatile)
+            {
+                $this._entries[$i].copy($other._entries[$i])
+            }
+        }
+        return $True
+    }
+
+    # Freeze APIs
+    [void] freeze()
+    {
+        $this._freeze = $True
+        foreach ($prop in $this.Properties())
+        {
+            $prop.freeze()
+       }
+    }
+    [void] unfreeze()
+    {
+        $this._freeze = $False
+        foreach ($prop in $this.Properties())
+        {
+            $prop.unfreeze()
+       }
+    }
+
+    [bool] is_frozen()
+    {
+        return $this._freeze
+    }
+
+    [object] get_root()
+    {
+        if ($this._parent -eq $null)
+        {
+            return $this
+        }
+        return $this._parent.get_root()
+    }
+
+    [bool] my_accept_value($value)
+    {
+        return $True
+    }
+
+    # State APIs:
+    [bool] is_changed()
+    {
+        return $this._state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
+    }
+
+    [bool] reboot_required()
+    {
+        foreach ($i in $this._entries)
+        {
+            if ($i.reboot_required())
+            {
+                return $True
+            }
+        }
+        return $False
+    }
+
+    [object] new($index, $kwargs)
+    {
+        return $this._new($index, $False, $kwargs)
+    }
+
+    [object] flexible_new($index, $kwargs)
+    {
+        return $this._new($index, $True, $kwargs)
+    }
+    [object] _new($index, $add, $kwargs)
+    {
+        if ($index -eq $null -and -not $this._index_helper.has_indexes())
+        {
+            throw [System.Exception], 'no more entries in array'
+        }
+        $entry = $this._cls($this, $this._loading_from_scp)
+        foreach ($i in $kwargs)
+        {
+            if ($i -notin $entry.__dict__ -and $add)
+            {
+                if ($kwargs[$i].GetType() -eq [int])
+                {
+                    $entry[$i] = [IntField]::new(0, $this)
+                }
+                else
+                {
+                    $entry[$i] = [StringField]("", $this)
+                }
+            }
+            $entry.__setattr__($i, $kwargs[$i])
+        }
+        if ($index -eq $null -and $this._get_key($entry) -eq $null)
+        {
+            throw [System.Exception], 'key not provided'
+        }
+        $key = $this._get_key($entry)
+        if ($index -eq $null -and ($key -and $key -in $this._keys))
+        {
+            throw [System.Exception], ($this._cls +" key "+$key +' already exists')
+        }
+
+        if ($index -eq $null)
+        {
+            $index = $this._index_helper.next_index()
+        }
+        else
+        {
+            $index = [int]$index
+        }
+        $entry._set_index($index)
+        $this._entries.append($entry)
+        $this._keys[$key] = $entry
+        $this._sort()
+
+        # set state!
+        if ($this._state -in @([TypeState]::UnInitialized, [TypeState]::Initializing))
+        {
+            $this._state = [TypeState]::Initializing
+        }
+        elseif ($this._state -in @([TypeState]::Committed, [TypeState]::Changing))
+        {
+            if ($this._values_changed($this._entries, $this.__dict__['_orig_value']))
+            {
+                $this._state = [TypeState]::Committed
+            }
+            else
+            {
+                $this._state = [TypeState]::Changing
+            }
+        }
+        else
+        {
+            write-host("Should not come here")
+        }
+        if ($this.is_changed() -and $this._parent -eq $null)
+        {
+            $this._parent.child_state_changed($this, $this._state)
+        }
+        return $entry
+    }
+
+    [bool] _clear_duplicates()
+    {
+        $keys = @{}
+        $toremove = [System.Collections.ArrayList]::new()
+
+        foreach ($entry in $this._entries)
+        {
+            $strkey = $this._get_key($entry)
+            if ($strkey -eq $null)
+            {
+                $toremove.Add($entry)
+            }
+            elseif ($strkey -in @("", "()"))
+            {
+                $toremove.Add($entry)
+            }
+            elseif ($strkey -in $keys)
+            {
+                $toremove.Add($entry)
+            }
+            $keys[$strkey] = $entry
+        }
+
+        foreach ($entry in $toremove)
+        {
+            $this._entries.remove($entry)
+            $this._index_helper.restore_index($entry._index)
+            $strkey = $this._get_key($entry)
+            if ($strkey -in $this._keys)
+            {
+                $this._keys.Remove($strkey)
+            }
+        }
+
+        foreach ($entry in $this._entries)
+        {
+            $this._index_helper.remove($entry._index)
+        }
+        $this._sort()
+        return $True
+    }
+
+    # returns a list
+    [System.Collections.ArrayList] find($kwargs)
+    {
+        return $this._find($True, $kwargs)
+    }
+    # returns the first entry
+    [object] find_first($kwargs)
+    {
+        $entries = $this._find($False, $kwargs)
+        if ($entries.Length -gt 0)
+        {
+            return $entries[0]
+        }
+        return $null
+    }
+
+    [object] entry_at($index)
+    {
+        foreach ($entry in $this._entries)
+        {
+            if ($entry._index -eq $index)
+            {
+                return $entry
+            }
+        }
+        return $null
+    }
+
+    [object] find_or_create($index=$null)
+    {
+        if ($index -ne $null)
+        {
+            $index = $this._index_helper.next_index()
+        }
+        else
+        {
+            $this._index_helper.remove($index)
+        }
+        foreach ($entry in $this._entries)
+        {
+            if ($entry._index -eq $index)
+            {
+                return $entry
+            }
+        }
+        return $this.new($index)
+    }
+
+    [object] remove($kwargs)
+    {
+        $entries = $this._find($True, $kwargs)
+        return $this._remove_selected($entries)
+    }
+
+    [object] remove_matching($criteria)
+    {
+        $entries = $this.find_matching($criteria)
+        return $this._remove_selected($entries)
+    }
+
+    [object] _remove_selected($entries)
+    {
+        if ($entries.Length -le 0)
+        {
+            return $entries
+        }
+
+        foreach ($i in $entries)
+        {
+            $this._entries.remove($i)
+            $this._index_helper.restore_index($i._index)
+            $key = $this._get_key($i)
+            if ($key -in $this._keys)
+            {
+                $this._keys.Remove($key)
+            }
+        }
+        $this._sort()
+
+        if ($this._state -in @([TypeState]::UnInitialized, [TypeState]::Precommit, [TypeState]::Initializing))
+        {
+            $this._state = [TypeState]::Initializing
+        }
+        elseif ($this._state -in @([TypeState]::Committed, [TypeState]::Changing))
+        {
+            if ($this._values_changed($this._entries, $this._orig_value))
+            {
+                $this._state = [TypeState]::Committed
+            }
+            else
+            {
+                $this._state = [TypeState]::Changing
+            }
+        }
+        else
+        {
+            write-host("Should not come here")
+        }
+
+        if ($this.is_changed() -and $this._parent -ne $null)
+        {
+            $this._parent.child_state_changed($this, $this._state)
+        }
+        return entries
+    }
+
+    [void] _sort()
+    {
+    #    $this._entries = sorted($this._entries, key = lambda entry: entry._index)
+    }
+
+    [System.Collections.ArrayList] _find($all_entries, $kwargs)
+    {
+        $output = [System.Collections.ArrayList]::new()
+        foreach ($entry in $this._entries)
+        {
+            $found = $True
+            foreach ($field in $kwargs)
+            {
+                if ($entry.($field).Value -ne $kwargs[$field])
+                {
+                    $found = $False
+                    break
+                }
+                if ($entry._attribs[$field] -ne $kwargs[$field])
+                {
+                    $found = $False
+                    break
+                }
+            }
+            if ($found)
+            {
+                $output.append($entry)
+                if (-not $all_entries) { break}
+            }
+        }
+        return $output
+    }
+
+    [System.Collections.ArrayList] find_matching($criteria)
+    {
+        $output = [System.Collections.ArrayList]::new()
+        foreach ($entry in $this._entries)
+        {
+            if ($this.select_entry($entry, $criteria))
+            {
+                $output.Add($entry)
+            }
+        }
+        return $output
+    }
+
+    
+    [string] Properties()
+    {
+        return $this._entries
+    }
+
+    [string] Json()
+    {
+        $output = @()
+        foreach ($entry in $this._entries)
+        {
+            $output.append($entry.Json())
+        }
+        return $output
+    }
+
+
+    [string] XML()
+    {
+        return $this._get_xml_string($True, '', $False)
+    }
+
+    [string] ModifiedXML()
+    {
+        return $this._get_xml_string($False, '', $False)
+    }
+
+    [string] _get_xml_string($everything, $space, $deleted)
+    {
+        $s = [System.IO.StringWriter]::new()
+        foreach ($entry in $this._entries)
+        {
+            if ($entry.is_changed() -eq $False -and -not $everything)
+            {
+                continue
+            }
+            $s.WriteLine($entry._get_xml_string($everything, $space, $False))
+        }
+        foreach ($entry in $this.values_deleted())
+        {
+            $s.WriteLine($entry._get_xml_string($True, $space, $True))
+        }
+        return $s.getvalue()
+    }
+
+    [string] select_entry($entry, $criteria)
+    {
+        if ($criteria.Contains('$this.'))
+        {
+            write-host ("criteria cannot have self references!")
+            return $False
+        }
+        $criteria = $criteria.Replace('.parent', '._parent._parent')
+        $criteria = $criteria -replace '([a-zA-Z0-9_.]+)\s+is\s+([^ \t]+)', '(type(\\1).__name__ == "\\2")'
+        write-host("Evaluating: " + $criteria)
+        return eval($criteria)
+    }
+
+}
+
+### DONE
+
+
+
 # Generated Code
 $BootModeTypes = [EnumType]::new('BootModeTypes', @{ Uefi = "Uefi"; Bios = "Bios"; None = "None" })
 $Levels = [EnumType]::new('Levels', @{ Administrator = "511"; Operator = "411"; User = "1" })
