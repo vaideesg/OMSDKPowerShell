@@ -45,6 +45,7 @@ class TypeBase {
     hidden $_freeze = $False
     hidden $_state = [TypeState]::UnInitialized
     hidden $_value
+    hidden $_fname
 
     [bool] my_accept_value($value)
     {
@@ -95,7 +96,7 @@ class FieldType : TypeBase
     # 3. How to not allow deletion of properties? [Powershell does not allow - so it is ok for now]
     # 4. Comparision Operations - [Workaround: Added __op__ APIs]
 
-    FieldType($type, $value, $properties)
+    FieldType($type, $init_value, $properties)
     {
         $this._type = $type
         $this._value = $(Add-Member -InputObject $this -MemberType ScriptProperty -TypeName $type -Name 'Value' -Value {
@@ -237,7 +238,7 @@ class FieldType : TypeBase
             #write-host("done.....")
         })
 
-        $this._value = $value
+        $this._value = $init_value
         $this | Add-Member -MemberType ScriptProperty  -Name 'OptimalValue' -Value {
             $this.Value
         } -SecondValue {
@@ -258,11 +259,36 @@ class FieldType : TypeBase
         {
             $this._rebootRequired = $True
         }
+        if ($properties.ContainsKey('Alias'))
+        {
+            $this._alias = $properties.Alias
+        }
+        if ($properties.ContainsKey('FieldName'))
+        {
+            $this._fname = $properties.FieldName
+        }
+        if ($properties.ContainsKey('Volatile') -and $properties.Volatile -eq $true)
+        {
+            $this._volatile = $True
+        }
+        if ($properties.ContainsKey('Parent'))
+        {
+            $this._parent = $properties.Parent
+        }
+        if ($properties.ContainsKey('Index'))
+        {
+            $this._index = $properties.Index
+        }
+        if ($properties.ContainsKey('DefaultOnDelete'))
+        {
+            $this._default_on_delete = $properties.DefaultOnDelete
+        }
         if ($properties.ContainsKey('IsList') -and $properties.IsList -eq $true)
         {
             $this._list = $True
         }
     }
+
 
     [void] set_value($value)
     {
@@ -858,6 +884,22 @@ class ClassType : TypeBase {
     hidden $_ign_attribs
     hidden $_ign_fields
 
+    ClassType()
+    {
+        $this._orig_value = {}
+    }
+    
+    [void] __setattr__($name, $value)
+    {
+        $this.($name).Value = $value
+        write-host ("set {0}={1}| {2}" -f $name, $value, $this.($name))
+    }
+
+    [bool] hasattr($t, $name)
+    {
+        return $null -ne (Get-Member -InputObject $t -Name $name)
+    }
+
     [void] _ignore_fields($fields)
     {
         $this._ign_fields = $fields
@@ -870,15 +912,6 @@ class ClassType : TypeBase {
 
     [bool] is_changed()
     {
-        #$rboot = $False
-        #foreach ($field in Get-Member -InputObject $this -MemberType Property)
-        #{
-            #if ($field.Name.StartsWith('_')) { continue }
-            #$prop = $this.($field.Name)
-            #if ($prop -ne $null -and $prop.GetType() -ne [System.String] -and $prop.is_changed()) {
-            #    return $True
-            #}
-        #}
         return $this._state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
     }
 
@@ -947,56 +980,107 @@ class ClassType : TypeBase {
     #TODO copy_state
     [void] _copy_state($source, $dest)
     {
+       #for i in source:
+       #     if i.startswith('_'): continue
+       #     if i not in dest:
+       #         dest[i] = source[i]
+       #
+       # for i in dest:
+       #     if i.startswith('_'): continue
+       #     if i not in source: del dest[i]
     }
 
     #TODO values_changed
     [bool] values_changed($source, $dest)
     {
 
+        #for i in source:
+        #    if i.startswith('_'): continue
+        #    if i not in dest: return False
+        #    if source[i].is_changed(): return False
+        #for i in dest:
+        #    if i.startswith('_'): continue
+        #    if i not in source: return False
+        #    if dest[i].is_changed(): return False
         return $True
     }
 
     # TODO _orig_value manipulation
     [bool] commit($loading_from_scp)
     {
-        $rboot = $False
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
+        if ($this.is_changed())
         {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
-                continue
+            if ($this._composite -eq $False)
+            {
+                $this._copy_state($this, $this._orig_value)
+                foreach ($prop in $this.Properties)
+                {
+                    $prop.commit($loading_from_scp)
+                }
             }
-            if ($prop.commit($loading_from_scp)) {
-                $rboot = $True
+            if ($loading_from_scp)
+            {
+                $this._state = [TypeState]::Precommit
             }
-       }
-       return $rboot
+            else
+            {
+                $this._state = [TypeState]::Committed
+            }
+        }
+        return $True
+
+        #$rboot = $False
+        #foreach ($field in Get-Member -InputObject $this -MemberType Property)
+        #{
+        #    if ($field.Name -eq '_optimal') { continue }
+        #    $prop = $this.($field.Name)
+        #    if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
+        #        continue
+        #    }
+        #    if ($prop.commit($loading_from_scp)) {
+        #        $rboot = $True
+        #    }
+        #}
+        #return $rboot
     }
 
     # TODO _orig_value manipulation
-    [bool] reject() {
-        $rboot = $True
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
-        {
-            if ($field.Name -eq '_optimal') { continue }
-            $prop = $this.($field.Name)
-            if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
-                continue
+    [bool] reject() 
+    {
+       if ($this.is_changed())
+       {
+            if ($this._composite -eq $False)
+            {
+                $this._copy_state($this._orig_value, $this)
+                $this._state = [TypeState]::Committed
+                foreach ($prop in $this.Properties)
+                {
+                    $prop.reject()
+                }
             }
-            if ($prop.reject() -eq $False) {
-                $rboot = $False
-            }
-       }
-       return $rboot
+        }
+        return $True
     }
 
-    # TODO 
     [void]child_state_changed($obj, $obj_state)
     {
+        if ($obj_state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing))
+        {
+            if ($this._state -in @([TypeState]::UnInitialized, [TypeState]::Precommit))
+            {
+                $this._state = [TypeState]::Initializing
+            }
+            elseif ($this._state -eq [TypeState]::Committed)
+            {
+                $this._state = [TypeState]::Changing
+            }
+        }
+        if ($this.is_changed() -and $this._parent -ne $null)
+        {
+            $this._parent.child_state_changed($this, $this._state)
+        }
     }
 
-    # TODO 
     [void]parent_state_changed($new_state)
     {
     }
@@ -1016,7 +1100,7 @@ class ClassType : TypeBase {
     {
         foreach ($prop in $this.Properties())
         {
-            if ($prop.reboot_required()) {
+            if ($this.($prop.Name).reboot_required()) {
                 return $True
             }
        }
@@ -1027,7 +1111,7 @@ class ClassType : TypeBase {
         $this._freeze = $True
         foreach ($prop in $this.Properties())
         {
-            $prop.freeze()
+            $this.($prop.Name).freeze()
        }
     }
     [void] unfreeze()
@@ -1035,7 +1119,7 @@ class ClassType : TypeBase {
         $this._freeze = $False
         foreach ($prop in $this.Properties())
         {
-            $prop.unfreeze()
+            $this.($prop.Name).unfreeze()
        }
     }
 
@@ -1044,15 +1128,22 @@ class ClassType : TypeBase {
         return $this._freeze
     }
 
-    # TODO
     [void] _set_index($index)
     {
+       $this._index = $index
+       foreach ($prop in $this.Properties())
+       {
+            $this.($prop.Name)._index = $index
+       }
     }
 
-    # TODO
     [TypeBase] get_root()
     {
-        return $this
+        if ($this._parent -eq $null)
+        {
+            return $this
+        }
+        return $this._parent.get_root()
     }
 
     # TODO
@@ -1062,7 +1153,11 @@ class ClassType : TypeBase {
     }
 
     #TODO
-    # compare operators, _get_combined_properties()
+    # def _get_combined_properties(self, obj1, obj2):
+    #    list1 = [i for i in obj1.__dict__ if not i.startswith('_')]
+    #    list1.extend([i for i in obj2.__dict__ if not i.startswith('_')])
+    #    return sorted(set(list1))
+
 }
 
 class RootClassType : ClassType {
@@ -1071,10 +1166,10 @@ class RootClassType : ClassType {
 
 class IndexHelper
 {
-    hidden [int]$min_value
-    hidden [int]$max_value
-    hidden [System.Collections.ArrayList]$indexes_free
-    hidden [System.Collections.ArrayList] $reserve
+    hidden $min_value
+    hidden $max_value
+    hidden $indexes_free
+    hidden $reserve
     IndexHelper($min_value, $max_value)
     {
         $this.min_value = $min_value
@@ -1128,6 +1223,7 @@ class IndexHelper
 
 }
 
+
 class FQDDHelper : IndexHelper
 {
     FQDDHelper() : base(1, 30) {}
@@ -1136,13 +1232,12 @@ class FQDDHelper : IndexHelper
 class ArrayType : TypeBase
 {
     hidden [System.Collections.ArrayList]$_entries
-    hidden $_fname
     hidden $_keys
     hidden $_cls
     hidden $_index_helper
     hidden $_loading_from_scp
 
-    ArrayType($clsname) 
+    ArrayType($clsname)
     {
         $this._init($clsname, $null, $null, $False)
     }
@@ -1158,7 +1253,7 @@ class ArrayType : TypeBase
         $this._loading_from_scp = $loading_from_scp
         if ($index_helper -eq $null)
         {
-            $index_helper = [IndexHelper]::new(1, 20)
+            $index_helper = [IndexHelper]::new(1, 30)
         }
         $this._index_helper = $index_helper
         $this._cls = $clsname
@@ -1170,6 +1265,10 @@ class ArrayType : TypeBase
     }
 
 
+    [bool] hasattr($t, $name)
+    {
+        return $null -ne (Get-Member -InputObject $t -Name $name)
+    }
 
     [int] Length()
     {
@@ -1229,7 +1328,7 @@ class ArrayType : TypeBase
         $source_idx = [System.Collections.ArrayList]::new()
         foreach ($entry in $source)
         {
-            $source_idx.append($this._get_key($entry))
+            $source_idx.Add($this._get_key($entry))
         }
         foreach ($entry in $dest)
         {
@@ -1372,7 +1471,7 @@ class ArrayType : TypeBase
         $this._freeze = $True
         foreach ($prop in $this.Properties())
         {
-            $prop.freeze()
+            $this.($prop.Name).freeze()
        }
     }
     [void] unfreeze()
@@ -1380,7 +1479,7 @@ class ArrayType : TypeBase
         $this._freeze = $False
         foreach ($prop in $this.Properties())
         {
-            $prop.unfreeze()
+            $this.($prop.Name).unfreeze()
        }
     }
 
@@ -1436,18 +1535,23 @@ class ArrayType : TypeBase
         {
             throw [System.Exception], 'no more entries in array'
         }
-        $entry = $this._cls($this, $this._loading_from_scp)
-        foreach ($i in $kwargs)
+        $entry = $this._cls::new($this, $this._loading_from_scp)
+        $entry_dict = @{}
+        foreach ($prop in $entry.Properties())
         {
-            if ($i -notin $entry.__dict__ -and $add)
+            $entry_dict[$prop.Name] = $prop
+        }
+        foreach ($i in $kwargs.Keys)
+        {
+            if ($i -notin $entry_dict -and $add)
             {
                 if ($kwargs[$i].GetType() -eq [int])
                 {
-                    $entry[$i] = [IntField]::new(0, $this)
+                    $entry[$i].Value = [IntField]::new(0, @{Parent=$this})
                 }
                 else
                 {
-                    $entry[$i] = [StringField]("", $this)
+                    $entry[$i].Value = [StringField]("", $this)
                 }
             }
             $entry.__setattr__($i, $kwargs[$i])
@@ -1471,7 +1575,10 @@ class ArrayType : TypeBase
             $index = [int]$index
         }
         $entry._set_index($index)
-        $this._entries.append($entry)
+        $this._entries.Add($entry)
+        $idxname = 'Index_' + $index
+
+        Add-Member -InputObject $this -Name ("Index_"+$index) -MemberType NoteProperty -Value $entry -Force
         $this._keys[$key] = $entry
         $this._sort()
 
@@ -1482,7 +1589,7 @@ class ArrayType : TypeBase
         }
         elseif ($this._state -in @([TypeState]::Committed, [TypeState]::Changing))
         {
-            if ($this._values_changed($this._entries, $this.__dict__['_orig_value']))
+            if ($this._values_changed($this._entries, $this._orig_value))
             {
                 $this._state = [TypeState]::Committed
             }
@@ -1613,6 +1720,7 @@ class ArrayType : TypeBase
 
         foreach ($i in $entries)
         {
+            Add-Member -InputObject $this -Name ("Index_"+$i._index) -MemberType NoteProperty -Value $null -Force
             $this._entries.remove($i)
             $this._index_helper.restore_index($i._index)
             $key = $this._get_key($i)
@@ -1647,7 +1755,7 @@ class ArrayType : TypeBase
         {
             $this._parent.child_state_changed($this, $this._state)
         }
-        return entries
+        return $entries
     }
 
     [void] _sort()
@@ -1668,15 +1776,15 @@ class ArrayType : TypeBase
                     $found = $False
                     break
                 }
-                if ($entry._attribs[$field] -ne $kwargs[$field])
+                if ($entry._attribs -ne $null -and ($entry._attribs[$field] -ne $kwargs[$field]))
                 {
-                    $found = $False
-                    break
+                        $found = $False
+                        break
                 }
             }
             if ($found)
             {
-                $output.append($entry)
+                $output.Add($entry)
                 if (-not $all_entries) { break}
             }
         }
@@ -1702,16 +1810,24 @@ class ArrayType : TypeBase
         return $this._entries
     }
 
-    [string] Json()
+    [string] myjson($level)
     {
-        $output = @()
-        foreach ($entry in $this._entries)
-        {
-            $output.append($entry.Json())
-        }
-        return $output
+        return $this.Json()
     }
 
+    [string] Json()
+    {
+        $s = [System.IO.StringWriter]::new()
+        $s.WriteLine("[ ")
+        $comma = ""
+        foreach ($entry in $this._entries)
+        {
+            $s.Write($entry.Json() + $comma)
+            $comma = ","
+        }
+        $s.WriteLine("]")
+        return $s.ToString()
+    }
 
     [string] XML()
     {
@@ -1745,7 +1861,7 @@ class ArrayType : TypeBase
     {
         if ($criteria.Contains('$this.'))
         {
-            write-host ("criteria cannot have self references!")
+            write-host ("criteria cannot have $this. references!")
             return $False
         }
         $criteria = $criteria.Replace('.parent', '._parent._parent')
@@ -1797,21 +1913,65 @@ class Time: ClassType {
     }
 }
 
+
 class iDRAC : ClassType {
     #[ValidatePattern("^[01]$")]
     #[string]$ina
     [Time]$Time
+    $Users
 
     iDRAC($loading_from_scp)
     {
         $this.Time = [Time]::new($loading_from_scp)
+        $this.Users = [ArrayType]::new([Users], $this, [IndexHelper]::new(1, 16), $loading_from_scp)
        #$this.ina = "1"
     }
 }
+
+$AuthenticationProtocol_UsersTypes = [EnumType]::new('AuthenticationProtocol_UsersTypes', @{ A = "A"; B = "B"; None = "None" })
+class Users : ClassType
+{
+    $AuthenticationProtocol
+    $ETAG
+    $Enable
+    $IpmiLanPrivilege
+    $IpmiSerialPrivilege
+    $Password
+    $PrivacyProtocol
+    $Privilege
+    $ProtocolEnable
+    $SolEnable
+    $UserName
+
+    Users($parent, $loading_from_scp)
+    {
+        $this.AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this })
+        # readonly attribute populated by iDRAC
+        $this.ETAG = [StringField]::new("", @{ Parent=$this; ReadOnly = $True })
+        $this.Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.Password = [StringField]::new("", $this)
+        $this.PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.Privilege = [EnumTypeField]::new($Global:Privilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.ProtocolEnable = [EnumTypeField]::new($Global:ProtocolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.SolEnable = [EnumTypeField]::new($Global:SolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
+        $this.UserName = [StringField]::new("", $this)
+        #$this.MD5v3Key = [StringField]::new("", @{ Parent=$this })
+        #$this.IPMIKey = [StringField]::new("", @{ Parent=$this })
+        #$this.SHA1v3Key = [StringField]::new("", @{ Parent=$this })
+        #$this.SHA256PasswordSalt = [StringField]::new("", @{ Parent=$this })
+        #$this.SHA256Password = [StringField]::new("", @{ Parent=$this })
+        #$this.UserPayloadAccess = [StringField]::new("", @{ Parent=$this })
+        $this.commit($loading_from_scp)
+    }
+}
+
 class SystemConfiguration : ClassType {
     [BIOS]$BIOS
     [iDRAC]$iDRAC
-    SystemConfiguration($loading_from_scp) {
+    SystemConfiguration($loading_from_scp)
+    {
        $this.BIOS = [BIOS]::new($loading_from_scp)
        $this.iDRAC = [iDRAC]::new($loading_from_scp)
     }
@@ -1826,6 +1986,7 @@ $t.iDRAC.Time.Time_Time.Value = "10"
 $t.iDRAC.Time.Timezone_Time.Value = 'CDT'
 #write-host ($t.iDRAC.Time.Timezone_Time)
 write-host ($t.iDRAC.Time.Timezones.OptimalValue)
+$t.iDRAC.Users.new(1, @{UserName='vaidees'; Password='vaidees123'})
 }
 catch 
 {
