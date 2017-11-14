@@ -891,6 +891,7 @@ class ClassType : TypeBase {
         {
             $this._parent = $properties.Parent
         }
+        $this._attribs = @{}
     }
     
     [void] __setattr__($name, $value)
@@ -1162,6 +1163,9 @@ class ClassType : TypeBase {
     #    list1.extend([i for i in obj2.__dict__ if not i.startswith('_')])
     #    return sorted(set(list1))
 
+    [void] _clear_duplicates()
+    {
+    }
 }
 
 class RootClassType : ClassType 
