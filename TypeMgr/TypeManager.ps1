@@ -884,9 +884,13 @@ class ClassType : TypeBase {
     hidden $_ign_attribs
     hidden $_ign_fields
 
-    ClassType()
+    ClassType($properties)
     {
         $this._orig_value = {}
+        if ($properties.ContainsKey('Parent'))
+        {
+            $this._parent = $properties.Parent
+        }
     }
     
     [void] __setattr__($name, $value)
@@ -1160,7 +1164,10 @@ class ClassType : TypeBase {
 
 }
 
-class RootClassType : ClassType {
+class RootClassType : ClassType 
+{
+    RootClassType($properties): base($properties) 
+    {}
 }
 
 
@@ -1535,7 +1542,7 @@ class ArrayType : TypeBase
         {
             throw [System.Exception], 'no more entries in array'
         }
-        $entry = $this._cls::new($this, $this._loading_from_scp)
+        $entry = $this._cls::new(@{Parent=$this; LoadingFromSCP=$this._loading_from_scp})
         $entry_dict = @{}
         foreach ($prop in $entry.Properties())
         {
@@ -1602,7 +1609,7 @@ class ArrayType : TypeBase
         {
             write-host("Should not come here")
         }
-        if ($this.is_changed() -and $this._parent -eq $null)
+        if ($this.is_changed() -and $this._parent -ne $null)
         {
             $this._parent.child_state_changed($this, $this._state)
         }
@@ -1883,11 +1890,12 @@ class BIOS : ClassType {
     [FieldType]$BootSeq
     [FieldType]$MemTest
 
-    BIOS($loading_from_scp)
+    BIOS($properties) : base($properties)
     {
         $this.BootMode = [EnumTypeField]::new($Global:BootModeTypes, $null, @{ RebootRequired = $True })
         $this.BootSeq  = [StringField]::new($null, @{})
         $this.MemTest   = [StringField]::new($null, @{ Readonly = $True })
+        $this.commit($properties.LoadingFromSCP)
     }
 }
 class Time: ClassType {
@@ -1898,7 +1906,7 @@ class Time: ClassType {
     [FieldType]$Timezone_Time
     [FieldType]$Timezones
 
-    Time($loading_from_scp)
+    Time($properties) : base($properties)
     {
         $this.DayLightOffset_Time = [IntField]::new($null, @{})
         $this.TimeZoneAbbreviation_Time = [StringField]::new("", @{})
@@ -1909,22 +1917,20 @@ class Time: ClassType {
             [System.Collections.ArrayList]('DayLightOffset_Time', 'Time_Time', 'Timezone_Time'), @{})
         $this._ignore_fields('DaylightOffset_Time')
         $this._ignore_fields('TimeZone_Time')
-        $this.commit($loading_from_scp)
+        $this.commit($properties.LoadingFromSCP)
     }
 }
 
 
 class iDRAC : ClassType {
-    #[ValidatePattern("^[01]$")]
-    #[string]$ina
     [Time]$Time
     $Users
 
-    iDRAC($loading_from_scp)
+    iDRAC($properties) : base($properties)
     {
-        $this.Time = [Time]::new($loading_from_scp)
-        $this.Users = [ArrayType]::new([Users], $this, [IndexHelper]::new(1, 16), $loading_from_scp)
-       #$this.ina = "1"
+        $this.Time = [Time]::new($properties)
+        $this.Users = [ArrayType]::new([Users], $this, [IndexHelper]::new(1, 16), $properties.LoadingFromSCP)
+        $this.commit($properties.LoadingFromSCP)
     }
 }
 
@@ -1943,7 +1949,7 @@ class Users : ClassType
     $SolEnable
     $UserName
 
-    Users($parent, $loading_from_scp)
+    Users($properties) : base($properties)
     {
         $this.AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this })
         # readonly attribute populated by iDRAC
@@ -1963,17 +1969,17 @@ class Users : ClassType
         #$this.SHA256PasswordSalt = [StringField]::new("", @{ Parent=$this })
         #$this.SHA256Password = [StringField]::new("", @{ Parent=$this })
         #$this.UserPayloadAccess = [StringField]::new("", @{ Parent=$this })
-        $this.commit($loading_from_scp)
+        $this.commit($properties.LoadingFromSCP)
     }
 }
 
 class SystemConfiguration : ClassType {
     [BIOS]$BIOS
     [iDRAC]$iDRAC
-    SystemConfiguration($loading_from_scp)
+    SystemConfiguration($loading_from_scp) : base(@{Parent=$null; LoadingFromSCP=$loading_from_scp})
     {
-       $this.BIOS = [BIOS]::new($loading_from_scp)
-       $this.iDRAC = [iDRAC]::new($loading_from_scp)
+       $this.BIOS = [BIOS]::new(@{Parent = $this; LoadingFromSCP = $loading_from_scp})
+       $this.iDRAC = [iDRAC]::new(@{Parent = $this; LoadingFromSCP = $loading_from_scp})
     }
 }
 
