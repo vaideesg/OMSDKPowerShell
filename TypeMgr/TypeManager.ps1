@@ -27,6 +27,7 @@ enum TypeState {
     Committed
     Changing
 }
+cd C:\Users\vaideeswaran_ganesan\work\OMSDKPowerShell
 
 class TypeBase {
     hidden $_orig_value = $null
@@ -51,6 +52,94 @@ class TypeBase {
     {
         return $true
     }
+
+    [object] _do_json($modified_only)
+    {
+        return $null
+    }
+
+    [string] Json()
+    {
+        $s = [System.IO.StringWriter]::new()
+        $tree = $this._do_json($false)
+        $this._jj($tree, $s, "")
+        return $s.ToString()
+    }
+
+    [string] ModifiedJson()
+    {
+        $s = [System.IO.StringWriter]::new()
+        $tree = $this._do_json($True)
+        $this._jj($tree, $s, "")
+        return $s.ToString()
+    }
+
+    [void] _jj($tree, $s, $level)
+    {
+
+        if ($tree -is [hashtable])
+        {
+            $start = "{"
+            $end = "}"
+            $s.Write($level + $start)
+
+            $comma = ""
+            foreach ($e in $tree.Keys)
+            {
+                $s.WriteLine($comma)
+                $s.Write($level)
+                $s.Write('  "{0}" : ' -f $e)
+                if ($tree[$e] -is [hashtable])
+                {
+                    $this._jj($tree[$e], $s, $level + "  ")
+                }
+                elseif ($tree[$e] -is [System.Collections.ArrayList])
+                {
+                    $this._jj($tree[$e], $s, $level + "  ")
+                }
+                else
+                {
+                    $s.Write('"{0}"' -f $tree[$e])
+                }
+                $comma = ","
+            }
+            $s.WriteLine()
+            $s.Write($level + $end)
+        }
+        elseif ($tree -is [System.Collections.ArrayList])
+        {
+            $start = "["
+            $end = "]"
+            $s.Write($level + $start)
+
+            $comma = ""
+            foreach ($e in $tree)
+            {
+                $s.WriteLine($comma)
+                $s.Write($level)
+                if ($e -is [hashtable])
+                {
+                    $this._jj($e, $s, $level + "  ")
+                }
+                elseif ($e -is [System.Collections.ArrayList])
+                {
+                    $this._jj($e, $s, $level + "  ")
+                }
+                else
+                {
+                    $s.Write('"{0}"' -f $e)
+                }
+                $comma = ","
+            }
+            $s.WriteLine()
+            $s.Write($level + $end)
+        }
+        else
+        {
+            $s.Write($level + $tree)
+        }
+    }
+
 }
 
 class EnumType
@@ -416,17 +505,7 @@ class FieldType : TypeBase, System.Icomparable
        return [string]$this.value
     }
 
-    [string] Json()
-    {
-       return [string]$this.value
-    }
-
-    [string] myjson($level)
-    {
-       return [string]$this.value
-    }
-
-    [string] modified_xml($level)
+    [object] _do_json($modified_only)
     {
        return [string]$this.value
     }
@@ -958,6 +1037,14 @@ class ClassType : TypeBase {
         $this.($name).Value = $value
     }
 
+    [void] __addattr__($properties)
+    {
+        foreach ($prop in $properties.Keys)
+        {
+            $this | Add-Member -Name $prop -Value $properties[$prop] -MemberType NoteProperty
+        }
+    }
+
     [bool] hasattr($t, $name)
     {
         return $null -ne (Get-Member -InputObject $t -Name $name)
@@ -975,7 +1062,7 @@ class ClassType : TypeBase {
 
     [bool] is_changed()
     {
-        return $this._state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
+        return $this._state -in @([TypeState]::UnInitialized, [TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
     }
 
     [void] add_valid_expression($name, $expression)
@@ -1025,61 +1112,22 @@ class ClassType : TypeBase {
         return $True
     }
 
-    [string] myjson($level)
+    [object] _do_json($modified_only)
     {
-        $s = [System.IO.StringWriter]::new()
-        $s.WriteLine("{ ")
+        $a = @{}
         foreach ($field in Get-Member -InputObject $this -MemberType Property,NoteProperty)
         {
             $s1 = $this.($field.Name)
-            if ($s1.GetType() -ne [System.String]) {
-                $s1 = $s1.myjson($level + "  ")
-            }
-            if ($s1.Contains('{') -eq $False) {
-                $s1 = """" +  $s1 + """"
-            }
-            $s.WriteLine($level + "  """ + $field.Name + """ : " + $s1)
-       }
-       $s.WriteLine($level + "}")
-       return $s.ToString()
-    }
-
-    [string] modified_xml($level)
-    {
-        $s = [System.IO.StringWriter]::new()
-        $s.WriteLine("{ ")
-        foreach ($field in Get-Member -InputObject $this -MemberType Property,NoteProperty)
-        {
-            $s1 = $this.($field.Name)
-            #write-host ("{0}.value = {1} | {2}" -f $field.Name, $s1, $s1.is_changed())
-            if ($s1 -eq $null -or $s1.is_changed() -eq $False)
+            if ($modified_only -and ($s1 -eq $null -or $s1.is_changed() -eq $False))
             {
                 continue
             }
-            if ($s1.GetType() -ne [System.String]) {
-                $s1 = $s1.modified_xml($level + "  ")
+            if ($s1 -isnot [CompositeField])
+            {
+                $a[$field.Name] = $s1._do_json($modified_only)
             }
-            if ($s1.Contains('{') -eq $False) {
-                $s1 = """" +  $s1 + """"
-            }
-            $s.WriteLine($level + "  """ + $field.Name + """ : " + $s1)
        }
-       if ($s.ToString() -eq "{ ")
-       {
-            return ""
-       }
-       $s.WriteLine($level + "}")
-       return $s.ToString()
-    }
-
-    [string] ModifiedXML() 
-    {
-        return $this.modified_xml("")
-    }
-
-    [string] Json() 
-    {
-        return $this.myjson("")
+       return $a
     }
 
     [bool] commit()
@@ -1125,6 +1173,7 @@ class ClassType : TypeBase {
                 $this._copy_state($this, $this._orig_value)
                 foreach ($prop in $this.Properties())
                 {
+                    write-host($prop.Name + " is changing")
                     $this.($prop.Name).commit($loading_from_scp)
                 }
             }
@@ -1139,19 +1188,6 @@ class ClassType : TypeBase {
         }
         return $True
 
-        #$rboot = $False
-        #foreach ($field in Get-Member -InputObject $this -MemberType Property)
-        #{
-        #    if ($field.Name -eq '_optimal') { continue }
-        #    $prop = $this.($field.Name)
-        #    if ($prop -eq $null -or $prop.GetType() -eq [System.String]) {
-        #        continue
-        #    }
-        #    if ($prop.commit($loading_from_scp)) {
-        #        $rboot = $True
-        #    }
-        #}
-        #return $rboot
     }
 
     # TODO _orig_value manipulation
@@ -1198,7 +1234,7 @@ class ClassType : TypeBase {
     [System.Collections.ArrayList] Properties()
     {
         $ret = [System.Collections.ArrayList]::new()
-        foreach ($field in Get-Member -InputObject $this -MemberType Property)
+        foreach ($field in Get-Member -InputObject $this -MemberType Property,NoteProperty)
         {
             if ($field.Name.StartsWith('_')) { continue }
             $ret.Add($field)
@@ -1926,51 +1962,22 @@ class ArrayType : TypeBase
         return $this._entries
     }
 
-    [string] myjson($level)
+    [object] _do_json($modified_only)
     {
-        return $this.Json()
-    }
-
-    [string] Json()
-    {
-        $s = [System.IO.StringWriter]::new()
-        $s.WriteLine("[ ")
-        $comma = ""
+        $a = [System.Collections.ArrayList]::new()
         foreach ($entry in $this._entries)
         {
-            $s.Write($entry.Json() + $comma)
-            $comma = ","
-        }
-        $s.WriteLine("]")
-        return $s.ToString()
-    }
-
-    [string] XML()
-    {
-        return $this._get_xml_string($True, '', $False)
-    }
-
-    [string] ModifiedXML()
-    {
-        return $this._get_xml_string($False, '', $False)
-    }
-
-    [string] _get_xml_string($everything, $space, $deleted)
-    {
-        $s = [System.IO.StringWriter]::new()
-        foreach ($entry in $this._entries)
-        {
-            if ($entry.is_changed() -eq $False -and -not $everything)
+            if ($entry.is_changed() -eq $False -and $modified_only)
             {
                 continue
             }
-            $s.WriteLine($entry._get_xml_string($everything, $space, $False))
+            $a.Add($entry._do_json($modified_only))
         }
         foreach ($entry in $this.values_deleted())
         {
-            $s.WriteLine($entry._get_xml_string($True, $space, $True))
+            $a.Add($entry._do_json($modified_only))
         }
-        return $s.getvalue()
+        return $a
     }
 
     [string] select_entry($entry, $criteria)
@@ -2102,38 +2109,28 @@ class iDRAC : ClassType {
 
 class Users : ClassType
 {
-    $AuthenticationProtocol
-    $ETAG
-    $Enable
-    $IpmiLanPrivilege
-    $IpmiSerialPrivilege
-    $Password
-    $PrivacyProtocol
-    $Privilege
-    $ProtocolEnable
-    $SolEnable
-    $UserName
-
     Users($properties) : base($properties)
     {
-        $this.AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this })
-        # readonly attribute populated by iDRAC
-        $this.ETAG = [StringField]::new("", @{ Parent=$this; ReadOnly = $True })
-        $this.Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.Password = [StringField]::new("", $this)
-        $this.PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.Privilege = [EnumTypeField]::new($Global:Privilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.ProtocolEnable = [EnumTypeField]::new($Global:ProtocolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.SolEnable = [EnumTypeField]::new($Global:SolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'})
-        $this.UserName = [StringField]::new("", $this)
-        #$this.MD5v3Key = [StringField]::new("", @{ Parent=$this })
-        #$this.IPMIKey = [StringField]::new("", @{ Parent=$this })
-        #$this.SHA1v3Key = [StringField]::new("", @{ Parent=$this })
-        #$this.SHA256PasswordSalt = [StringField]::new("", @{ Parent=$this })
-        #$this.SHA256Password = [StringField]::new("", @{ Parent=$this })
-        #$this.UserPayloadAccess = [StringField]::new("", @{ Parent=$this })
+        $this.__addattr__(@{
+            AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this; LoadingFromSCP = $properties.loading_from_scp })
+            # readonly attribute populated by iDRAC
+            ETAG = [StringField]::new("", @{ Parent=$this; ReadOnly = $True; LoadingFromSCP = $properties.loading_from_scp  })
+            Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            Password = [StringField]::new("", $this)
+            PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            Privilege = [EnumTypeField]::new($Global:Privilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            ProtocolEnable = [EnumTypeField]::new($Global:ProtocolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            SolEnable = [EnumTypeField]::new($Global:SolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
+            UserName = [StringField]::new("", $this)
+            #MD5v3Key = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
+            #IPMIKey = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
+            #SHA1v3Key = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
+            #SHA256PasswordSalt = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
+            #SHA256Password = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
+            #UserPayloadAccess = [StringField]::new("", @{ Parent=$this;LoadingFromSCP = $properties.loading_from_scp  })
+        })
         $this.commit($properties.LoadingFromSCP)
     }
 }

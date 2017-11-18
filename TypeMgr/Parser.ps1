@@ -171,7 +171,7 @@ class SCPParser
                 
                 if (-not ($subentry.Properties() | where { $_.Name -eq $field }))
                 {
-                    $subentry.__setattr($field, [StringField]::new($child.InnerText, @{Parent=$subentry}))
+                    $subentry.__setattr__($field, [StringField]::new($child.InnerText, @{Parent=$subentry}))
                     write-host($field+' not found in '+ $subentry.getType())
                     write-host("Ensure the attribute registry is updated.")
                     continue
