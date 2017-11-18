@@ -56,7 +56,8 @@ class SCPParser
             $pattern = Get-Member -InputObject $entry -Name 'pattern'
             if ($pattern -ne $null)
             {
-                if ($entry.($pattern.Name) -match $comp_fqdd)
+                #write-host("{0} -match {1}" -f $entry.($pattern.Name), $comp_fqdd)
+                if ($comp_fqdd -match $entry.($pattern.Name))
                 {
                     if ($sysconfig.Properties() | where { $_.Name -eq $i.Name })
                     {
@@ -88,7 +89,6 @@ class SCPParser
             if ($child.Name -eq 'Component')
             {
                 $subnode = $this._get_entry($child.FQDD, $entry)
-                write-host ($subnode)
                 if ($subnode -eq $null)
                 {
                     write-host('No component spec found for ' + $child.FQDD)
@@ -123,24 +123,23 @@ class SCPParser
                 # plain attribute
                 if ( -not ($entry.Properties() | where { $_.Name -eq $attrname }) )
                 {
-                    write-host ("Not found: {0}" -f $attrname)
+                    #write-host ("Not found: {0}" -f $attrname)
                     $entry.__setattr__($attrname, [StringField]::new($child.InnerText, @{Parent=$entry}))
-                    write-host($attrname + ' not found in ' + $entry.GetType())
-                    write-host("Ensure the attribute registry is updated.")
+                    #write-host($attrname + ' not found in ' + $entry.GetType())
+                    #write-host("Ensure the attribute registry is updated.")
                     continue
                 }
-    
-                if ($child.text -eq $null -or $child.text.strip() -eq '')
+                elseif ([string]::IsNullOrWhiteSpace($child.InnerText))
                 {
                     # empty - what to do?
-                    if ($entry.__dict__[$attrname]._type -eq [string])
+                    if ($entry.($attrname)._type -eq [string])
                     {
-                        $entry.__dict__[$attrname].Value = ""
+                        $entry.($attrname).Value = ""
                     }
                 }
                 else
                 {
-                    $entry.__dict__[$attrname].Value = $child.text.strip()
+                    $entry.($attrname).Value = $child.InnerText.Trim()
                 }
                 continue
             }
@@ -169,6 +168,7 @@ class SCPParser
                 {
                     $field = $field + '_' + $group
                 }
+                
                 if (-not ($subentry.Properties() | where { $_.Name -eq $field }))
                 {
                     $subentry.__setattr($field, [StringField]::new($child.InnerText, @{Parent=$subentry}))
@@ -176,9 +176,8 @@ class SCPParser
                     write-host("Ensure the attribute registry is updated.")
                     continue
                 }
-                write-host($child.InnerText)
                
-                if ($child.InnerText -eq $null -or $child.InnerText.Trim() -eq '')
+                if ([string]::IsNullOrWhiteSpace($child.InnerText))
                 {
                     $fentry = $subentry.Properties() | where { $_.Name -eq $field }
                     # empty - what to do?
@@ -189,12 +188,7 @@ class SCPParser
                 }
                 else
                 {
-                    try {
-                        $subentry.($field).Value = $child.InnerText.Trim()
-                    } catch 
-                    {
-                        write-host($group + "..." + $field)
-                    }
+                    $subentry.($field).Value = $child.InnerText.Trim()
                 }
             }
         }
