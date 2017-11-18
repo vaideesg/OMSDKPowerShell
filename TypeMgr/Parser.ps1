@@ -33,30 +33,35 @@
 #            $this.end(t.tag)
 
 
-class XMLParser
+
+
+class SCPParser
 {
     hidden $config_spec
-    XMLParser($cspecfile)
+    SCPParser($cspecfile)
     {
         $this.config_spec = {}
         if (($cspecfile -ne $null) -and (Test-Path $cspecfile))
         {
-            with open(cspecfile) as f:
-                $this.config_spec = json.load(f)
+            $this.config_spec = (Get-content $cspecfile | ConvertFrom-Json)
         }
     }
 
     [object] _get_entry($comp_fqdd, $sysconfig)
     {
-        foreach ($i in $this.config_spec)
+        write-host ">$comp_fqdd<"
+        foreach ($i in (Get-Member -MemberType NoteProperty -InputObject $this.config_spec))
         {
-            if ('pattern' -in $this.config_spec[$i])
+            $entry = $this.config_spec.($i.Name)
+            $pattern = Get-Member -InputObject $entry -Name 'pattern'
+            if ($pattern -ne $null)
             {
-                if ($this.config_spec[$i]['pattern'] -match $comp_fqdd)
+                if ($entry.($pattern.Name) -match $comp_fqdd)
                 {
-                    if ($i -in $sysconfig.Properties())
+                    if ($sysconfig.Properties() | where { $_.Name -eq $i.Name })
                     {
-                        return $sysconfig.$i
+                        write-host ("=======Found Match {0} => {1}" -f $comp_fqdd, $i.Name)
+                        return $sysconfig.($i.Name)
                     }
                 }
             }
@@ -66,14 +71,27 @@ class XMLParser
 
     [void] _load_child($node, $entry)
     {
-        foreach ($child in $node)
+        foreach ($child in $node.ChildNodes)
         {
-            if ($child.tag -eq 'Component')
+            if ($child.NodeType -eq 'Comment')
             {
-                $subnode = $this._get_entry($child.get('FQDD'), $entry)
+                if ($child.InnerText -notmatch '<Attribute .*</Attribute>')
+                {
+                    continue
+                }
+                $child = [xml]($child.InnerText)
+                if ($child.NodeType -eq 'Document')
+                {
+                    $child = $child.ChildNodes[0]
+                }
+            }
+            if ($child.Name -eq 'Component')
+            {
+                $subnode = $this._get_entry($child.FQDD, $entry)
+                write-host ($subnode)
                 if ($subnode -eq $null)
                 {
-                    write-host('No component spec found for ' + $child.get('FQDD'))
+                    write-host('No component spec found for ' + $child.FQDD)
                     continue
                 }
                 $parent = $null
@@ -93,19 +111,20 @@ class XMLParser
                 continue
             }
     
-            $attrname = $child.get("Name")
+            $attrname = $child.Name
             if ($attrname -eq $null)
             {
                 write-host("ERROR: No attribute found!!")
                 continue
             }
     
-            if ('.' -notin $attrname)
+            if ($attrname.Contains('.') -eq $false)
             {
                 # plain attribute
-                if ($attrname -notin $entry.__dict__)
+                if ( -not ($entry.Properties() | where { $_.Name -eq $attrname }) )
                 {
-                    $entry.__setattr__($attrname, [StringField]::new($child.text, $entry))
+                    write-host ("Not found: {0}" -f $attrname)
+                    $entry.__setattr__($attrname, [StringField]::new($child.InnerText, @{Parent=$entry}))
                     write-host($attrname + ' not found in ' + $entry.GetType())
                     write-host("Ensure the attribute registry is updated.")
                     continue
@@ -126,39 +145,58 @@ class XMLParser
                 continue
             }
     
-            $match = '(.*)\.([0-9]+)#(.*)' -match $attrname
-            if ($match -eq $false)
+            $match = $attrname -split '(.*)\.([0-9]+)#(.*)'
+            if ($match.Count -ne 5)
             {
                 write-host($attrname + ' not good ')
                 continue
             }
     
-            #(group, index, field) = match.groups()
-            #if group in entry.__dict__:
-            #    grp = entry.__dict__[group]
+            $group = $match[1]
+            $index = $match[2]
+            $field = $match[3]
+            if ($entry.Properties() | where { $_.Name -eq $group })
+            {
+                $grp = $entry.($group)
     
-            #    subentry = grp
-            #    if isinstance(grp, ArrayType):
-            #        subentry = grp.find_or_create(index=int(index))
+                $subentry = $grp
+                if ($grp -is [ArrayType])
+                {
+                    $subentry = $grp.find_or_create([int]$index)
+                }
     
-            #    if field not in subentry.__dict__:
-            #        field = field + '_' + group
-            #    if field not in subentry.__dict__:
-            #        subentry.__dict__[field] = StringField(child.text, parent=subentry)
-            #        logging.debug(field+' not found in '+type(subentry).__name__)
-            #        logging.debug("Ensure the attribute registry is updated.")
-            #        continue
-            #    if child.text is None or child.text.strip() == '':
+                if (-not ($subentry.Properties() | where { $_.Name -eq $field }))
+                {
+                    $field = $field + '_' + $group
+                }
+                if (-not ($subentry.Properties() | where { $_.Name -eq $field }))
+                {
+                    $subentry.__setattr($field, [StringField]::new($child.InnerText, @{Parent=$subentry}))
+                    write-host($field+' not found in '+ $subentry.getType())
+                    write-host("Ensure the attribute registry is updated.")
+                    continue
+                }
+                write-host($child.InnerText)
+               
+                if ($child.InnerText -eq $null -or $child.InnerText.Trim() -eq '')
+                {
+                    $fentry = $subentry.Properties() | where { $_.Name -eq $field }
                     # empty - what to do?
-            #        if subentry.__dict__[field]._type == str:
-            #            subentry.__dict__[field]._value = ""
-            #    else:
-            #        try:
-            #            subentry.__dict__[field]._value = child.text.strip()
-            #        except Exception as ex:
-            #            print(group + "..." + field)
-            #            print(subentry._state)
-            #            print("ERROR:" + str(ex))
+                    if ($fentry._type -eq [string])
+                    {
+                       $subentry.($field).Value = ""
+                    }
+                }
+                else
+                {
+                    try {
+                        $subentry.($field).Value = $child.InnerText.Trim()
+                    } catch 
+                    {
+                        write-host($group + "..." + $field)
+                    }
+                }
+            }
         }
     }
     
@@ -175,8 +213,12 @@ class XMLParser
         }
         foreach ($subnode in $node.ChildNodes)
         {
+            if ($subnode.NodeType -eq 'Comment') 
+            {
+                write-host ($subnode.InnerText)
+                continue
+            }
             # Component!
-
             $entry = $this._get_entry($subnode.FQDD, $sysconfig)
             if ($entry -eq $null)
             {
@@ -210,3 +252,6 @@ class XMLParser
         return $sysconfig
     }
 }
+
+$scpparser = [SCPParser]::new('..\omsdk\omdrivers\iDRAC\Config\iDRAC.comp_spec')
+$sysconfig = $scpparser.parse_scp('.\config.xml')

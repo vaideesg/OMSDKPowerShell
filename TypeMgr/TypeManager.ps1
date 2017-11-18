@@ -88,7 +88,7 @@ class TypeHelper
     }
 }
 
-class FieldType : TypeBase
+class FieldType : TypeBase, System.Icomparable
 {
     # FieldType:: TODO
     # 1. _orig_value and _state should not be allowed for modify outside typemgr
@@ -166,7 +166,7 @@ class FieldType : TypeBase
                     }
                     else
                     {
-                        $msg = "{0} is not {1}" -f $value, $this._type
+                        $msg = "Enum Value {0} does not exist in Enumeration {1}" -f $value, $this.enumtype
                     }
                 }
                 else
@@ -327,6 +327,11 @@ class FieldType : TypeBase
         }
     }
 
+    [bool] isNullOrEmpty()
+    {
+        return ($this.Value -eq $null -or $this.Value -eq '')
+    }
+
     [void]child_state_changed($obj, $obj_state)
     {
     }
@@ -424,6 +429,53 @@ class FieldType : TypeBase
     [string] modified_xml($level)
     {
        return [string]$this.value
+    }
+
+    [int] CompareTo($other)
+    {
+        if ($this._state -eq [TypeState]::UnInitialized)
+        {
+            return ($other -ne $null)
+        }
+        if ($this.Value -eq $null -and $other -eq $null)
+        {
+            return 0
+        }
+        if ($this.Value -eq $null -and $other -ne $null)
+        {
+            return -1
+        }
+        if ($this.Value -ne $null -and $other -eq $null)
+        {
+            return 1
+        }
+
+        $myvalue = $this.Value
+        if ($other.GetType() -eq $this.GetType())
+        {
+            $othervalue = $other.Value
+        }
+        elseif ($other.GetType() -eq $this._type)
+        {
+            $othervalue = $other
+        }
+        else
+        {
+            throw [System.Exception], 'cannot compare with {0}' -f $other.GetType()
+        }
+        if ($myvalue -eq $null -and $othervalue -eq $null)
+        {
+            return 0
+        }
+        if ($myvalue -eq $null -and $othervalue -ne $null)
+        {
+            return -1
+        }
+        if ($myvalue -ne $null -and $othervalue -eq $null)
+        {
+            return 1
+        }
+        return $myvalue.CompareTo($othervalue)
     }
 
     # Compare APIs:
@@ -883,6 +935,7 @@ class ClassType : TypeBase {
     hidden $_attribs
     hidden $_ign_attribs
     hidden $_ign_fields
+    hidden $_valid_exprs
 
     ClassType($properties)
     {
@@ -892,6 +945,7 @@ class ClassType : TypeBase {
             $this._parent = $properties.Parent
         }
         $this._attribs = @{}
+        $this._valid_exprs = [System.Collections.ArrayList]::new()
     }
     
     [void] __setattr__($name, $value)
@@ -918,6 +972,53 @@ class ClassType : TypeBase {
     [bool] is_changed()
     {
         return $this._state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
+    }
+
+    [void] add_valid_expression($name, $expression)
+    {
+        $this._valid_exprs.Add(@{$name = $expression})
+    }
+
+    [bool] is_valid()
+    {
+        return $this._check_valid('One', $null)
+    }
+
+    [bool] check_all_rules()
+    {
+        return $this._check_valid('All', $null)
+    }
+
+    [System.Collections.ArrayList] get_failed_rules()
+    {
+        $errors = @()
+        $this._check_valid('All', [ref]$errors)
+        return $errors
+    }
+
+    [bool] _check_valid($scope, [ref]$errors)
+    {
+        $returnValue = $True
+        foreach ($valid_expr in $this._valid_exprs)
+        {  
+            foreach ($expr in $valid_expr.Keys)
+            {
+                if (Invoke-Expression $valid_expr[$expr])
+                {
+                    $returnValue = $False
+                    if ($errors -ne $null)
+                    {
+                        $errors.Value += @{ $expr = $valid_expr[$expr] }
+                    }
+                    if ($scope -eq 'One')
+                    {
+                        return $False
+                    }
+                }
+            }
+        }
+
+        return $True
     }
 
     [string] myjson($level)
@@ -1018,9 +1119,9 @@ class ClassType : TypeBase {
             if ($this._composite -eq $False)
             {
                 $this._copy_state($this, $this._orig_value)
-                foreach ($prop in $this.Properties)
+                foreach ($prop in $this.Properties())
                 {
-                    $prop.commit($loading_from_scp)
+                    $this.($prop.Name).commit($loading_from_scp)
                 }
             }
             if ($loading_from_scp)
@@ -1690,9 +1791,9 @@ class ArrayType : TypeBase
         return $null
     }
 
-    [object] find_or_create($index=$null)
+    [object] find_or_create($index)
     {
-        if ($index -ne $null)
+        if ($index -eq $null)
         {
             $index = $this._index_helper.next_index()
         }
@@ -1707,7 +1808,7 @@ class ArrayType : TypeBase
                 return $entry
             }
         }
-        return $this.new($index)
+        return $this.new($index, @{})
     }
 
     [object] remove($kwargs)
@@ -1888,19 +1989,32 @@ class ArrayType : TypeBase
 $BootModeTypes = [EnumType]::new('BootModeTypes', @{ Uefi = "Uefi"; Bios = "Bios"; None = "None" })
 $Levels = [EnumType]::new('Levels', @{ Administrator = "511"; Operator = "411"; User = "1" })
 
+$tzones = (Get-content 'timezones.json' | ConvertFrom-Json)
+$tzones_dict = @{}
+foreach ($tzone in Get-Member -MemberType NoteProperty -InputObject $tzones) 
+{
+    $tzones_dict[$tzone.Name] = $tzone.Name
+}
+$TimeZones = [EnumType]::new('TimeZones', $tzones_dict)
 
 class BIOS : ClassType {
     [FieldType]$BootMode
-    [FieldType]$BootSeq
     [FieldType]$MemTest
+    [FieldType]$UefiBootSeq
+    [FieldType]$BiosBootSeq
 
     BIOS($properties) : base($properties)
     {
         $this.BootMode = [EnumTypeField]::new($Global:BootModeTypes, $null, @{ RebootRequired = $True })
-        $this.BootSeq  = [StringField]::new($null, @{})
+        $this.UefiBootSeq  = [StringField]::new($null, @{})
+        $this.BiosBootSeq  = [StringField]::new($null, @{})
         $this.MemTest   = [StringField]::new($null, @{ Readonly = $True })
+        $this.add_valid_expression("BiosValidRule", '$this.BootMode.Value -eq "Bios" -and $this.BiosBootSeq.isNullOrEmpty()') 
+        $this.add_valid_expression("UefiValidRule", '$this.BootMode.Value -eq "Uefi" -and $this.UefiBootSeq.isNullOrEmpty()') 
         $this.commit($properties.LoadingFromSCP)
     }
+
+
 }
 class Time: ClassType {
     [FieldType]$DayLightOffset_Time
@@ -1916,7 +2030,7 @@ class Time: ClassType {
         $this.TimeZoneAbbreviation_Time = [StringField]::new("", @{})
         $this.TimeZoneOffset_Time = [IntField]::new($null, @{})
         $this.Time_Time = [IntField]::new($null, @{})
-        $this.Timezone_Time = [StringField]::new("", @{})
+        $this.Timezone_Time = [EnumTypeField]::new($Global:TimeZones, $null, @{ })
         $this.Timezones = [CompositeField]::new($this, 
             [System.Collections.ArrayList]('DayLightOffset_Time', 'Time_Time', 'Timezone_Time'), @{})
         $this._ignore_fields('DaylightOffset_Time')
@@ -1993,7 +2107,7 @@ $t1 = [IntField]::new(40, @{})
 $t.BIOS.BootMode.Value = 'Bios'
 $t.iDRAC.Time.DayLightOffset_Time.Value = $t1
 $t.iDRAC.Time.Time_Time.Value = "10"
-$t.iDRAC.Time.Timezone_Time.Value = 'CDT'
+$t.iDRAC.Time.Timezone_Time.Value = 'Asia/Calcutta'
 #write-host ($t.iDRAC.Time.Timezone_Time)
 write-host ($t.iDRAC.Time.Timezones.OptimalValue)
 $t.iDRAC.Users.new(1, @{UserName='vaidees'; Password='vaidees123'})
