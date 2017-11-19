@@ -506,7 +506,7 @@ class FieldType : TypeBase, System.Icomparable
     }
     [string] ToString()
     {
-       return [string]$this.value
+       return [string]$this.Value
     }
 
     [object] _do_json($modified_only)
@@ -970,11 +970,6 @@ class EnumTypeField : FieldType {
     {
         $this.enumType = $enumType
     }
-
-    [string] ToString()
-    {
-        return $this.enumType.Name
-    }
 }
 
 class CompositeField : FieldType {
@@ -1305,6 +1300,20 @@ class ClassType : TypeBase {
 
     [void] _clear_duplicates()
     {
+        foreach ($prop in $this.Properties())
+        {
+            if ($this.($prop.Name) -isnot [FieldType])
+            {
+                $this.($prop.Name)._clear_duplicates()
+            }
+        }
+    }
+
+    [object] select_entry($criteria)
+    {
+        $criteria = $criteria.Replace('.parent', '._parent._parent')
+        $criteria = $criteria -replace '([a-zA-Z0-9_.]+)\s+is\s+([^ \t]+)', '${1} -is [${2}]'
+        return Invoke-Expression ($criteria)
     }
 }
 
@@ -1363,7 +1372,7 @@ class IndexHelper
         if  ($index -notin $this.reserve -and $index -notin $this.indexes_free)
         {
             $this.indexes_free.Add($index)
-            $this.indexes_free = ($this.indexes_free | sort)
+            #$this.indexes_free = ($this.indexes_free | sort)
         }
     }
 
@@ -1379,6 +1388,8 @@ class FQDDHelper : IndexHelper
 {
     FQDDHelper() : base(1, 30) {}
 }
+
+# TODO: ArrayType.new() is not updating the parent class
 
 class ArrayType : TypeBase
 {
@@ -1415,7 +1426,6 @@ class ArrayType : TypeBase
         $this._state = [TypeState]::Committed
     }
 
-
     [bool] hasattr($t, $name)
     {
         return $null -ne (Get-Member -InputObject $t -Name $name)
@@ -1426,27 +1436,53 @@ class ArrayType : TypeBase
         return $this._entries.Length
     }
 
+
+    [object] _get_key($entry)
+    {
+        if ($this.hasattr($entry, 'Key'))
+        {
+            $key = $entry.Key()
+            if ($key -ne $null) { $key = $key.ToString() }
+            return $key
+        }
+        else
+        {
+            return $entry._index
+        }
+    }
+
     [bool] _copy_state($source, $dest)
     {
-        # from _entries to _orig_entries
-        $toadd = [System.Collections.ArrayList]::new()
+        $source_entries = @{}
+        $dest_entries = @{}
         foreach ($i in $source)
         {
-            if ($i -notin $dest)
+            $source_entries[$i._index] = $i
+        }
+        foreach ($i in $dest)
+        {
+            $dest_entries[$i._index] = $i
+        }
+        # from _entries to _orig_entries
+        $toadd = [System.Collections.ArrayList]::new()
+        foreach ($i in $source_entries.Keys)
+        {
+            if ($dest_entries.ContainsKey($i) -eq $False)
             {
-                $toadd.Add($i)
+                $toadd.Add($source_entries[$i])
             }
         }
 
         $toremove = [System.Collections.ArrayList]::new()
-        foreach ($i in $dest)
+        foreach ($i in $dest_entries.Keys)
         {
-            if ($i -notin $source)
+            if ($source_entries.ContainsKey($i) -eq $False)
             {
-                $toremove.Add($i)
+                $toremove.Add($dest_entries[$i])
             }
         }
 
+        write-host($dest.count)
         foreach ($i in $toremove)
         {
             $dest.remove($i)
@@ -1460,59 +1496,6 @@ class ArrayType : TypeBase
         return $True
     }
 
-    [object] _get_key($entry)
-    {
-        if ($this.hasattr($entry, 'Key'))
-        {
-            $key = $entry.Key._value
-            if ($key -ne $null) { $key = $key.ToString() }
-            return $key
-        }
-        else
-        {
-            return $entry._index
-        }
-    }
-
-    [bool] _values_changed($source, $dest)
-    {
-        $source_idx = [System.Collections.ArrayList]::new()
-        foreach ($entry in $source)
-        {
-            $source_idx.Add($this._get_key($entry))
-        }
-        foreach ($entry in $dest)
-        {
-            if ($this._get_key($entry) -notin $source_idx)
-            {
-                return $False
-            }
-            $source_idx.remove($this._get_key($entry))
-        }
-        return ($source_idx.Length -le 0)
-    }
-
-    [System.Collections.ArrayList] values_deleted()
-    {
-        $source_idx = [System.Collections.ArrayList]::new()
-        $dest_entries = [System.Collections.ArrayList]::new()
-        foreach ($entry in $this._entries)
-        {
-            $source_idx.Add($this._get_key($entry))
-        }
-        foreach ($entry in $this._orig_value)
-        {
-            $key = $this._get_key($entry)
-            if ($key -notin $source_idx)
-            {
-                $dest_entries.append($entry)
-                continue
-            }
-            $source_idx.remove($key)
-        }
-        return $dest_entries
-    }
-
     # State : to Committed
     # allowed even during freeze
     [bool] commit()
@@ -1524,12 +1507,13 @@ class ArrayType : TypeBase
     {
         if ($this.is_changed())
         {
-            if ($this._composite)
+            if ($this._composite -eq $False)
             {
                 $this._copy_state($this._entries, $this._orig_value)
                 #$this._orig_value = sorted($this.__dict__['_orig_value'], key = lambda entry: entry._index)
                 foreach ($entry in $this._entries)
                 {
+                    $this._index_helper.remove($entry._index)
                     $entry.commit($LoadingFromSCP)
                 }
             }
@@ -1551,7 +1535,7 @@ class ArrayType : TypeBase
     {
         if ($this.is_changed())
         {
-            if (-not $this._composite)
+            if ($this._composite -eq $false)
             {
                 $this._copy_state($this._orig_value, $this._entries)
                 foreach ($entry in $this._entries)
@@ -1572,7 +1556,6 @@ class ArrayType : TypeBase
     # Does not have children - so not implemented
     [void] child_state_changed($child, $child_state)
     {
-
         if ($child_state -in @([TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing))
         {
             if ($this._state -eq [TypeState]::UnInitialized)
@@ -1712,7 +1695,7 @@ class ArrayType : TypeBase
             throw [System.Exception], 'key not provided'
         }
         $key = $this._get_key($entry)
-        if ($index -eq $null -and ($key -and $key -in $this._keys))
+        if ($index -eq $null -and ($key -eq $null -and $this._keys.ContainsKey($key)))
         {
             throw [System.Exception], ($this._cls +" key "+$key +' already exists')
         }
@@ -1730,7 +1713,10 @@ class ArrayType : TypeBase
         $idxname = 'Index_' + $index
 
         Add-Member -InputObject $this -Name ("Index_"+$index) -MemberType NoteProperty -Value $entry -Force
-        $this._keys[$key] = $entry
+        if ($key -ne $null)
+        {
+            $this._keys[$key] = $entry
+        }
         $this._sort()
 
         # set state!
@@ -1786,17 +1772,13 @@ class ArrayType : TypeBase
         foreach ($entry in $toremove)
         {
             $this._entries.remove($entry)
+            Add-Member -InputObject $this -Name ("Index_"+$entry._index) -MemberType NoteProperty -Value $null -Force
             $this._index_helper.restore_index($entry._index)
             $strkey = $this._get_key($entry)
-            if ($strkey -in $this._keys)
+            if ($this._keys.ContainsKey($strkey))
             {
                 $this._keys.Remove($strkey)
             }
-        }
-
-        foreach ($entry in $this._entries)
-        {
-            $this._index_helper.remove($entry._index)
         }
         $this._sort()
         return $True
@@ -1864,23 +1846,22 @@ class ArrayType : TypeBase
 
     [object] _remove_selected($entries)
     {
-        if ($entries.Length -le 0)
+        if ($entries.Count -le 0)
         {
             return $entries
         }
 
-        foreach ($i in $entries)
+        foreach ($entry in $entries)
         {
-            Add-Member -InputObject $this -Name ("Index_"+$i._index) -MemberType NoteProperty -Value $null -Force
-            $this._entries.remove($i)
-            $this._index_helper.restore_index($i._index)
-            $key = $this._get_key($i)
-            if ($key -in $this._keys)
+            $this._entries.remove($entry)
+            Add-Member -InputObject $this -Name ("Index_"+$entry._index) -MemberType NoteProperty -Value $null -Force
+            $this._index_helper.restore_index($entry._index)
+            $strkey = $this._get_key($entry)
+            if ($this._keys.ContainsKey($strkey))
             {
-                $this._keys.Remove($key)
+                $this._keys.Remove($strkey)
             }
         }
-        $this._sort()
 
         if ($this._state -in @([TypeState]::UnInitialized, [TypeState]::Precommit, [TypeState]::Initializing))
         {
@@ -1920,14 +1901,22 @@ class ArrayType : TypeBase
         foreach ($entry in $this._entries)
         {
             $found = $True
-            foreach ($field in $kwargs)
+            foreach ($field in $kwargs.Keys)
             {
-                if ($entry.($field).Value -ne $kwargs[$field])
+                if ($entry.($field).Value -eq $null)
+                {
+                    if ($kwargs[$field] -ne $null)
+                    {
+                        $found = $False
+                        break
+                    }
+                }
+                elseif ($entry.($field).Value -ne $kwargs[$field])
                 {
                     $found = $False
                     break
                 }
-                if ($entry._attribs -ne $null -and ($entry._attribs[$field] -ne $kwargs[$field]))
+                if ($entry._attribs -ne $null -and $entry._attribs.ContainsKey($field) -and $entry._attribs[$field] -ne $kwargs[$field])
                 {
                         $found = $False
                         break
@@ -1947,13 +1936,21 @@ class ArrayType : TypeBase
         $output = [System.Collections.ArrayList]::new()
         foreach ($entry in $this._entries)
         {
-            if ($this.select_entry($entry, $criteria))
+            if ($entry.select_entry($criteria) -eq $true)
             {
                 $output.Add($entry)
             }
         }
         return $output
     }
+
+    [object] select_entry($criteria)
+    {
+        $criteria = $criteria.Replace('.parent', '._parent._parent')
+        $criteria = $criteria -replace '([a-zA-Z0-9_.]+)\s+is\s+([^ \t]+)', '${1} -is [${2}]'
+        return Invoke-Expression ($criteria)
+    }
+
 
     
     [string] Properties()
@@ -1979,19 +1976,43 @@ class ArrayType : TypeBase
         return $a
     }
 
-    [string] select_entry($entry, $criteria)
+    [bool] _values_changed($source, $dest)
     {
-        if ($criteria.Contains('$this.'))
+        $source_idx = @{}
+        foreach ($entry in $this._entries)
         {
-            write-host ("criteria cannot have $this. references!")
-            return $False
+            $source_idx[$entry._index] = $entry
         }
-        $criteria = $criteria.Replace('.parent', '._parent._parent')
-        $criteria = $criteria -replace '([a-zA-Z0-9_.]+)\s+is\s+([^ \t]+)', '(${1}.GetType().Name == "${2}")'
-        write-host("Evaluating: " + $criteria)
-        return Invoke-Expression ($criteria)
+        foreach ($entry in $this._orig_value)
+        {
+            if ($source_idx.ContainsKey($entry._index) -eq $false)
+            {
+                return $False
+            }
+            $source_idx.Remove($entry._index)
+        }
+        return ($source_idx.Length -le 0)
     }
 
+    [System.Collections.ArrayList] values_deleted()
+    {
+        $source_idx = @{}
+        $dest_entries = [System.Collections.ArrayList]::new()
+        foreach ($entry in $this._entries)
+        {
+            $source_idx[$entry._index] = $entry
+        }
+        foreach ($entry in $this._orig_value)
+        {
+            if ($source_idx.ContainsKey($entry._index) -eq $false)
+            {
+                $dest_entries.Add($entry)
+                continue
+            }
+            $source_idx.Remove($entry._index)
+        }
+        return $dest_entries
+    }
 }
 
 
@@ -2113,6 +2134,16 @@ class Users : ClassType
         })
         $this.commit($properties.LoadingFromSCP)
     }
+
+    [object] Key()
+    {
+        return $this.UserName.Value
+    }
+
+    [int] Index()
+    {
+        return $this._index
+    }
 }
 
 class iDRAC : ClassType {
@@ -2138,3 +2169,5 @@ class SystemConfiguration : RootClassType {
     }
 }
 
+#$s.iDRAC.Users.find_matching('$this.Privilege.Value -eq "511"') | select UserName
+#$s.iDRAC.Users.find_matching('$this.UserName.Value -match "vaidees"') | select UserName
