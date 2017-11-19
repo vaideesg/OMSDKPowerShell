@@ -1372,7 +1372,7 @@ class IndexHelper
         if  ($index -notin $this.reserve -and $index -notin $this.indexes_free)
         {
             $this.indexes_free.Add($index)
-            #$this.indexes_free = ($this.indexes_free | sort)
+            $this.indexes_free.Sort()
         }
     }
 
@@ -1510,7 +1510,6 @@ class ArrayType : TypeBase
             if ($this._composite -eq $False)
             {
                 $this._copy_state($this._entries, $this._orig_value)
-                #$this._orig_value = sorted($this.__dict__['_orig_value'], key = lambda entry: entry._index)
                 foreach ($entry in $this._entries)
                 {
                     $this._index_helper.remove($entry._index)
@@ -1717,7 +1716,6 @@ class ArrayType : TypeBase
         {
             $this._keys[$key] = $entry
         }
-        $this._sort()
 
         # set state!
         if ($this._state -in @([TypeState]::UnInitialized, [TypeState]::Initializing))
@@ -1780,7 +1778,6 @@ class ArrayType : TypeBase
                 $this._keys.Remove($strkey)
             }
         }
-        $this._sort()
         return $True
     }
 
@@ -1888,11 +1885,6 @@ class ArrayType : TypeBase
             $this._parent.child_state_changed($this, $this._state)
         }
         return $entries
-    }
-
-    [void] _sort()
-    {
-    #    $this._entries = sorted($this._entries, key = lambda entry: entry._index)
     }
 
     [System.Collections.ArrayList] _find($all_entries, $kwargs)
