@@ -62,7 +62,7 @@ class TypeBase {
     {
         $s = [System.IO.StringWriter]::new()
         $tree = $this._do_json($false)
-        $this._jj($tree, $s, "")
+        $this.format($tree, $s, "")
         return $s.ToString()
     }
 
@@ -70,11 +70,11 @@ class TypeBase {
     {
         $s = [System.IO.StringWriter]::new()
         $tree = $this._do_json($True)
-        $this._jj($tree, $s, "")
+        $this.format($tree, $s, "")
         return $s.ToString()
     }
 
-    [void] _jj($tree, $s, $level)
+    [void] format($tree, $s, $level)
     {
 
         if ($tree -is [hashtable])
@@ -91,11 +91,11 @@ class TypeBase {
                 $s.Write('  "{0}" : ' -f $e)
                 if ($tree[$e] -is [hashtable])
                 {
-                    $this._jj($tree[$e], $s, $level + "  ")
+                    $this.format($tree[$e], $s, $level + "  ")
                 }
                 elseif ($tree[$e] -is [System.Collections.ArrayList])
                 {
-                    $this._jj($tree[$e], $s, $level + "  ")
+                    $this.format($tree[$e], $s, $level + "  ")
                 }
                 else
                 {
@@ -119,11 +119,11 @@ class TypeBase {
                 $s.Write($level)
                 if ($e -is [hashtable])
                 {
-                    $this._jj($e, $s, $level + "  ")
+                    $this.format($e, $s, $level + "  ")
                 }
                 elseif ($e -is [System.Collections.ArrayList])
                 {
-                    $this._jj($e, $s, $level + "  ")
+                    $this.format($e, $s, $level + "  ")
                 }
                 else
                 {
@@ -216,6 +216,10 @@ class FieldType : TypeBase, System.Icomparable
             if ($value -eq $null -or $value.GetType() -eq $this._type)
             {
                 #Write-host ("initial value")
+                $valid = $True
+            }
+            elseif ($value -eq [System.Management.Automation.Language.NullString]::Value)
+            {
                 $valid = $True
             }
             elseif ($this.GetType() -eq $value.GetType())
@@ -435,7 +439,7 @@ class FieldType : TypeBase, System.Icomparable
     {
         return $this.commit($False)
     }
-    [bool] commit($loading_from_scp)
+    [bool] commit($LoadingFromSCP)
     {
         if ($this.is_changed() -or $this._state -eq [TypeState]::Precommit)
         {
@@ -443,7 +447,7 @@ class FieldType : TypeBase, System.Icomparable
             {
                 $this._orig_value = $this._value
             }
-            if ($loading_from_scp)
+            if ($LoadingFromSCP)
             {
                 $this._state = [TypeState]::Precommit
             }
@@ -1018,7 +1022,6 @@ class ClassType : TypeBase {
 
     ClassType($properties)
     {
-        $this._orig_value = {}
         if ($properties.ContainsKey('Parent'))
         {
             $this._parent = $properties.Parent
@@ -1067,49 +1070,85 @@ class ClassType : TypeBase {
 
     [void] add_valid_expression($name, $expression)
     {
-        $this._valid_exprs.Add(@{$name = $expression})
+        $this.add_valid_expression($name, '$true', $expression)
+    }
+    [void] add_valid_expression($name, $prelim, $expression)
+    {
+        $this._valid_exprs.Add(@{$name = @{ PrelimCondition = $prelim; Expression =$expression }})
     }
 
     [bool] is_valid()
     {
-        return $this._check_valid('One', $null)
+        $retval = $True
+        foreach ($field in Get-Member -InputObject $this -MemberType Property,NoteProperty)
+        {
+            $s1 = $this.($field.Name)
+            if ($s1 -is [ClassType] -and $s1.is_valid() -eq $False)
+            {
+                return $false
+            }
+        }
+        return $this._check_valid('One', [System.Collections.ArrayList]::new())
     }
 
     [bool] check_all_rules()
     {
-        return $this._check_valid('All', $null)
+        $retval = $True
+        foreach ($field in Get-Member -InputObject $this -MemberType Property,NoteProperty)
+        {
+            $s1 = $this.($field.Name)
+            if ($s1 -is [ClassType] -and $s1.check_all_rules() -eq $False)
+            {
+                $retval = $false
+            }
+        }
+        return $this._check_valid('All', [System.Collections.ArrayList]::new()) -and $retval
     }
 
     [System.Collections.ArrayList] get_failed_rules()
     {
-        $errors = @()
-        $this._check_valid('All', [ref]$errors)
+        $errors = [System.Collections.ArrayList]::new()
+        $this._get_failed_rules($errors)
         return $errors
     }
+    [void] _get_failed_rules($errors)
+    {
+        foreach ($field in Get-Member -InputObject $this -MemberType Property,NoteProperty)
+        {
+            $s1 = $this.($field.Name)
+            if ($s1 -is [ClassType])
+            {
+                $s1._get_failed_rules($errors)
+            }
+        }
+        $this._check_valid('All', $errors)
+    }
 
-    [bool] _check_valid($scope, [ref]$errors)
+    [bool] _check_valid($scope, $errors)
     {
         $returnValue = $True
         foreach ($valid_expr in $this._valid_exprs)
         {  
             foreach ($expr in $valid_expr.Keys)
             {
-                if (Invoke-Expression $valid_expr[$expr])
+                $result = Invoke-Expression $valid_expr[$expr]['PrelimCondition']
+                if ($result -eq $False)
+                {
+                    continue
+                }
+                $result = Invoke-Expression $valid_expr[$expr]['Expression']
+                if ($result -eq $False)
                 {
                     $returnValue = $False
-                    if ($errors -ne $null)
-                    {
-                        $errors.Value += @{ $expr = $valid_expr[$expr] }
-                    }
+                    $errors.Add(@{ $expr = $valid_expr[$expr] })
                     if ($scope -eq 'One')
                     {
-                        return $False
+                        return $returnValue
                     }
                 }
             }
         }
-
-        return $True
+        return $returnValue
     }
 
     [object] _do_json($modified_only)
@@ -1135,49 +1174,18 @@ class ClassType : TypeBase {
         return $this.commit($False)
     }
 
-    #TODO copy_state
-    [void] _copy_state($source, $dest)
-    {
-       #for i in source:
-       #     if i.startswith('_'): continue
-       #     if i not in dest:
-       #         dest[i] = source[i]
-       #
-       # for i in dest:
-       #     if i.startswith('_'): continue
-       #     if i not in source: del dest[i]
-    }
-
-    #TODO values_changed
-    [bool] values_changed($source, $dest)
-    {
-
-        #for i in source:
-        #    if i.startswith('_'): continue
-        #    if i not in dest: return False
-        #    if source[i].is_changed(): return False
-        #for i in dest:
-        #    if i.startswith('_'): continue
-        #    if i not in source: return False
-        #    if dest[i].is_changed(): return False
-        return $True
-    }
-
-    # TODO _orig_value manipulation
-    [bool] commit($loading_from_scp)
+    [bool] commit($LoadingFromSCP)
     {
         if ($this.is_changed())
         {
             if ($this._composite -eq $False)
             {
-                $this._copy_state($this, $this._orig_value)
                 foreach ($prop in $this.Properties())
                 {
-                    write-host($prop.Name + " is changing")
-                    $this.($prop.Name).commit($loading_from_scp)
+                    $this.($prop.Name).commit($LoadingFromSCP)
                 }
             }
-            if ($loading_from_scp)
+            if ($LoadingFromSCP)
             {
                 $this._state = [TypeState]::Precommit
             }
@@ -1190,19 +1198,17 @@ class ClassType : TypeBase {
 
     }
 
-    # TODO _orig_value manipulation
     [bool] reject() 
     {
        if ($this.is_changed())
        {
             if ($this._composite -eq $False)
             {
-                $this._copy_state($this._orig_value, $this)
-                $this._state = [TypeState]::Committed
-                foreach ($prop in $this.Properties)
+                foreach ($prop in $this.Properties())
                 {
-                    $prop.reject()
+                    $this.($prop.Name).reject()
                 }
+                $this._state = [TypeState]::Committed
             }
         }
         return $True
@@ -1292,17 +1298,10 @@ class ClassType : TypeBase {
         return $this._parent.get_root()
     }
 
-    # TODO
     [void] add_attribute($name, $value)
     {
         $this._attribs[$name] = $value
     }
-
-    #TODO
-    # def _get_combined_properties(self, obj1, obj2):
-    #    list1 = [i for i in obj1.__dict__ if not i.startswith('_')]
-    #    list1.extend([i for i in obj2.__dict__ if not i.startswith('_')])
-    #    return sorted(set(list1))
 
     [void] _clear_duplicates()
     {
@@ -1387,22 +1386,22 @@ class ArrayType : TypeBase
     hidden $_keys
     hidden $_cls
     hidden $_index_helper
-    hidden $_loading_from_scp
+    hidden $_LoadingFromSCP
 
     ArrayType($clsname)
     {
         $this._init($clsname, $null, $null, $False)
     }
 
-    ArrayType($clsname, $parent, $index_helper, $loading_from_scp)
+    ArrayType($clsname, $parent, $index_helper, $LoadingFromSCP)
     {
-        $this._init($clsname, $parent, $index_helper, $loading_from_scp)
+        $this._init($clsname, $parent, $index_helper, $LoadingFromSCP)
     }
-    [void] _init($clsname, $parent, $index_helper, $loading_from_scp)
+    [void] _init($clsname, $parent, $index_helper, $LoadingFromSCP)
     {
         $this._fname = $clsname.Name
         $this._parent = $parent
-        $this._loading_from_scp = $loading_from_scp
+        $this._LoadingFromSCP = $LoadingFromSCP
         if ($index_helper -eq $null)
         {
             $index_helper = [IndexHelper]::new(1, 30)
@@ -1521,7 +1520,7 @@ class ArrayType : TypeBase
         return $this.commit($False)
     }
 
-    [bool] commit($loading_from_scp)
+    [bool] commit($LoadingFromSCP)
     {
         if ($this.is_changed())
         {
@@ -1531,10 +1530,10 @@ class ArrayType : TypeBase
                 #$this._orig_value = sorted($this.__dict__['_orig_value'], key = lambda entry: entry._index)
                 foreach ($entry in $this._entries)
                 {
-                    $entry.commit($loading_from_scp)
+                    $entry.commit($LoadingFromSCP)
                 }
             }
-            if ($loading_from_scp)
+            if ($LoadingFromSCP)
             {
                 $this._state = [TypeState]::Precommit
             }
@@ -1687,7 +1686,7 @@ class ArrayType : TypeBase
         {
             throw [System.Exception], 'no more entries in array'
         }
-        $entry = $this._cls::new(@{Parent=$this; LoadingFromSCP=$this._loading_from_scp})
+        $entry = $this._cls::new(@{Parent=$this; LoadingFromSCP=$this._LoadingFromSCP})
         $entry_dict = @{}
         foreach ($prop in $entry.Properties())
         {
@@ -2053,41 +2052,33 @@ foreach ($tzone in Get-Member -MemberType NoteProperty -InputObject $tzones)
 $TimeZones = [EnumType]::new('TimeZones', $tzones_dict)
 
 class BIOS : ClassType {
-    [FieldType]$BootMode
-    [FieldType]$MemTest
-    [FieldType]$UefiBootSeq
-    [FieldType]$BiosBootSeq
-
     BIOS($properties) : base($properties)
     {
-        $this.BootMode = [EnumTypeField]::new($Global:BootModeTypes, $null, @{ RebootRequired = $True })
-        $this.UefiBootSeq  = [StringField]::new($null, @{})
-        $this.BiosBootSeq  = [StringField]::new($null, @{})
-        $this.MemTest   = [StringField]::new($null, @{ Readonly = $True })
-        $this.add_valid_expression("BiosValidRule", '$this.BootMode.Value -eq "Bios" -and $this.BiosBootSeq.isNullOrEmpty()') 
-        $this.add_valid_expression("UefiValidRule", '$this.BootMode.Value -eq "Uefi" -and $this.UefiBootSeq.isNullOrEmpty()') 
+        $this.__addattr__(@{
+            BootMode = [EnumTypeField]::new($Global:BootModeTypes, $null, @{ RebootRequired = $True; Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            UefiBootSeq  = [StringField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            BiosBootSeq  = [StringField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            MemTest   = [StringField]::new($null, @{ Readonly = $True; Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+        })
+        $this.add_valid_expression("BiosValidRule", '$this.BootMode.Value -eq "Bios"', '-not $this.BiosBootSeq.isNullOrEmpty()') 
+        $this.add_valid_expression("UefiValidRule", '$this.BootMode.Value -eq "Uefi"', '-not $this.UefiBootSeq.isNullOrEmpty()') 
+        $this.add_valid_expression("BootModeValidRule", '-not $this.BootMode.isNullOrEmpty()') 
         $this.commit($properties.LoadingFromSCP)
     }
-
-
 }
-class Time: ClassType {
-    [FieldType]$DayLightOffset_Time
-    [FieldType]$TimeZoneAbbreviation_Time
-    [FieldType]$TimeZoneOffset_Time
-    [FieldType]$Time_Time
-    [FieldType]$Timezone_Time
-    [FieldType]$Timezones
 
+class Time: ClassType {
     Time($properties) : base($properties)
     {
-        $this.DayLightOffset_Time = [IntField]::new($null, @{})
-        $this.TimeZoneAbbreviation_Time = [StringField]::new("", @{})
-        $this.TimeZoneOffset_Time = [IntField]::new($null, @{})
-        $this.Time_Time = [IntField]::new($null, @{})
-        $this.Timezone_Time = [EnumTypeField]::new($Global:TimeZones, $null, @{ })
-        $this.Timezones = [CompositeField]::new($this, 
-            [System.Collections.ArrayList]('DayLightOffset_Time', 'Time_Time', 'Timezone_Time'), @{})
+        $this.__addattr__(@{
+            DayLightOffset_Time = [IntField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            TimeZoneAbbreviation_Time = [StringField]::new("", @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            TimeZoneOffset_Time = [IntField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            Time_Time = [IntField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            Timezone_Time = [EnumTypeField]::new($Global:TimeZones, $null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            Timezones = [CompositeField]::new($this, 
+                [System.Collections.ArrayList]('DayLightOffset_Time', 'Time_Time', 'Timezone_Time'), @{Readonly=$true; Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+        })
         $this._ignore_fields('DaylightOffset_Time')
         $this._ignore_fields('TimeZone_Time')
         $this.commit($properties.LoadingFromSCP)
@@ -2095,53 +2086,55 @@ class Time: ClassType {
 }
 
 
-class iDRAC : ClassType {
-    [Time]$Time
-    $Users
-
-    iDRAC($properties) : base($properties)
-    {
-        $this.Time = [Time]::new($properties)
-        $this.Users = [ArrayType]::new([Users], $this, [IndexHelper]::new(1, 16), $properties.LoadingFromSCP)
-        $this.commit($properties.LoadingFromSCP)
-    }
-}
 
 class Users : ClassType
 {
     Users($properties) : base($properties)
     {
         $this.__addattr__(@{
-            AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this; LoadingFromSCP = $properties.loading_from_scp })
+            AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this; LoadingFromSCP = $properties.LoadingFromSCP })
             # readonly attribute populated by iDRAC
-            ETAG = [StringField]::new("", @{ Parent=$this; ReadOnly = $True; LoadingFromSCP = $properties.loading_from_scp  })
-            Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            Password = [StringField]::new("", $this)
-            PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            Privilege = [EnumTypeField]::new($Global:Privilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            ProtocolEnable = [EnumTypeField]::new($Global:ProtocolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            SolEnable = [EnumTypeField]::new($Global:SolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.loading_from_scp })
-            UserName = [StringField]::new("", $this)
-            #MD5v3Key = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
-            #IPMIKey = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
-            #SHA1v3Key = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
-            #SHA256PasswordSalt = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
-            #SHA256Password = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.loading_from_scp  })
-            #UserPayloadAccess = [StringField]::new("", @{ Parent=$this;LoadingFromSCP = $properties.loading_from_scp  })
+            ETAG = [StringField]::new("", @{ Parent=$this; ReadOnly = $True; LoadingFromSCP = $properties.LoadingFromSCP  })
+            Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            Password = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            Privilege = [EnumTypeField]::new($Global:Privilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            ProtocolEnable = [EnumTypeField]::new($Global:ProtocolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            SolEnable = [EnumTypeField]::new($Global:SolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            UserName  = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            #MD5v3Key = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            #IPMIKey = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            #SHA1v3Key = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            #SHA256PasswordSalt = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            #SHA256Password = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
+            #UserPayloadAccess = [StringField]::new("", @{ Parent=$this;LoadingFromSCP = $properties.LoadingFromSCP  })
         })
         $this.commit($properties.LoadingFromSCP)
     }
 }
 
-class SystemConfiguration : ClassType {
-    [BIOS]$BIOS
-    [iDRAC]$iDRAC
-    SystemConfiguration($loading_from_scp) : base(@{Parent=$null; LoadingFromSCP=$loading_from_scp})
+class iDRAC : ClassType {
+
+    iDRAC($properties) : base($properties)
     {
-       $this.BIOS = [BIOS]::new(@{Parent = $this; LoadingFromSCP = $loading_from_scp})
-       $this.iDRAC = [iDRAC]::new(@{Parent = $this; LoadingFromSCP = $loading_from_scp})
+        $this.__addattr__(@{
+            Time = [Time]::new(@{Parent = $this; LoadingFromSCP = $properties.LoadingFromSCP})
+            Users = [ArrayType]::new([Users], $this, [IndexHelper]::new(1, 16), @{Parent = $this; LoadingFromSCP = $properties.LoadingFromSCP})
+        })
+        $this.commit($properties.LoadingFromSCP)
+    }
+}
+
+class SystemConfiguration : RootClassType {
+    SystemConfiguration($LoadingFromSCP) : base(@{Parent=$null; LoadingFromSCP=$LoadingFromSCP})
+    {
+        $this.__addattr__(@{
+            BIOS = [BIOS]::new(@{Parent = $this; LoadingFromSCP = $LoadingFromSCP})
+            iDRAC = [iDRAC]::new(@{Parent = $this; LoadingFromSCP = $LoadingFromSCP})
+        })
+        $this.commit($LoadingFromSCP)
     }
 }
 
