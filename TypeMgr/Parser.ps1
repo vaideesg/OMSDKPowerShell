@@ -246,6 +246,3 @@ class SCPParser
         return $sysconfig
     }
 }
-
-$scpparser = [SCPParser]::new('..\omsdk\omdrivers\iDRAC\Config\iDRAC.comp_spec')
-$sysconfig = $scpparser.parse_scp('.\config.xml')

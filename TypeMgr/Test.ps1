@@ -1,24 +1,52 @@
 ﻿
-class t2 {
-}
+# omdrivers\enums\
+# omdrivers\types\
+# omdrivers\lifecycle\idracconfig.py
+# omdrivers\lifecycle\raidhelper.py
+# omdrivers\idrac.py (partial_entity_json[storage])
+cd C:\Users\vaideeswaran_ganesan\Work\OMSDKPowerShell
+Import-Module .\TypeMgr\TypeManager.ps1
+Import-Module .\TypeMgr\Parser.ps1
 
-class t : t2 {
-[int] $value
-t($val) {
-    $this.value = $val
-}
-static [int] Compare([object] $a, [object] $b)
+function New-iDRAC-Session
 {
-    write-here "compare"
-    if ($a -is [t] -and $b -is [t]) {
-        write-host "here"
-        return ($a.value -eq $b.value)
+    param(
+        $IPOrHost,
+        $Credentials,
+        $LiasonShare,
+        [switch]$Simulate
+    )
+    if ($Simulate)
+    {
+        if (Test-Path ".\simulator\$IPOrHost\config\config.xml")
+        {
+            $scpparser = [SCPParser]::new('..\omsdk\omdrivers\iDRAC\Config\iDRAC.comp_spec')
+            return $scpparser.parse_scp(".\simulator\$IPOrHost\config\config.xml")
+        }
     }
-    return $False
-
-}
+    return $null
 }
 
+function Apply-iDRAC-Session
+{
+    param(
+        $session,
+        [switch]$Simulate
+    )
+    if ($Simulate)
+    {
+        $session.ModifiedJson()
+    }
+}
+
+
+$idrac = New-iDRACSession -IPOrHost '100.100.249.114' -Simulate
+$idrac.iDRAC.Time.TimeZone_Time.Value ="Africa/Abidjan"
+Apply-iDRAC-Session -session $idrac -Simulate
+
+
+if ($False)
+{
 try {
 $t = [SystemConfiguration]::new($False)
 $t1 = [IntField]::new(40, @{})
@@ -80,3 +108,4 @@ if ($t.is_changed()) {
 
 $t1 = [t]::new(10)
 $t2 = [t]::new(12)
+}
