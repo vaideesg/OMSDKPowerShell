@@ -76,26 +76,26 @@ class TypeBase {
 
     [void] format($tree, $s, $level)
     {
-
+        $increment = "    "
         if ($tree -is [hashtable])
         {
             $start = "{"
             $end = "}"
-            $s.Write($level + $start)
+            $s.Write($start)
 
             $comma = ""
             foreach ($e in $tree.Keys)
             {
                 $s.WriteLine($comma)
-                $s.Write($level)
-                $s.Write('  "{0}" : ' -f $e)
+                $s.Write($level + $increment)
+                $s.Write('"{0}" : ' -f $e)
                 if ($tree[$e] -is [hashtable])
                 {
-                    $this.format($tree[$e], $s, $level + "  ")
+                    $this.format($tree[$e], $s, $level + $increment)
                 }
                 elseif ($tree[$e] -is [System.Collections.ArrayList])
                 {
-                    $this.format($tree[$e], $s, $level + "  ")
+                    $this.format($tree[$e], $s, $level + $increment)
                 }
                 else
                 {
@@ -110,20 +110,20 @@ class TypeBase {
         {
             $start = "["
             $end = "]"
-            $s.Write($level + $start)
+            $s.Write($start)
 
             $comma = ""
             foreach ($e in $tree)
             {
                 $s.WriteLine($comma)
-                $s.Write($level)
+                $s.Write($level + $increment)
                 if ($e -is [hashtable])
                 {
-                    $this.format($e, $s, $level + "  ")
+                    $this.format($e, $s, $level + $increment)
                 }
                 elseif ($e -is [System.Collections.ArrayList])
                 {
-                    $this.format($e, $s, $level + "  ")
+                    $this.format($e, $s, $level + $increment)
                 }
                 else
                 {
@@ -182,8 +182,7 @@ class FieldType : TypeBase, System.Icomparable
     # FieldType:: TODO
     # 1. _orig_value and _state should not be allowed for modify outside typemgr
     # 2. How to freeze and unfreeze objects for accidental modification?
-    # 3. How to not allow deletion of properties? [Powershell does not allow - so it is ok for now]
-    # 4. Comparision Operations - [Workaround: Added __op__ APIs]
+    # 3. Comparision Operations - [Workaround: Added CompareTo() and __xx__() APIs]
 
     FieldType($type, $init_value, $properties)
     {
@@ -1009,7 +1008,7 @@ class ClassType : TypeBase {
     # ClassType:: TODO
     # 1. _state should not be allowed for modify outside typemgr
     # 2. How to freeze and unfreeze objects for accidental modification?
-    # 3. Comparision Operations - [Workaround: Added __op__ APIs]
+    # 3. Comparision Operations -??
     hidden $_attribs
     hidden $_ign_attribs
     hidden $_ign_fields
@@ -1030,7 +1029,7 @@ class ClassType : TypeBase {
         #write-host ("set {0}={1}| {2}" -f $name, $value, $this.($name))
         if ($this.($name) -eq $null)
         {
-            $this | Add-Member -Name $name -Value ([StringField]::new($null, @{})) -MemberType NoteProperty
+            $this | Add-Member -Name $name -Value ([StringField]::new($null, @{Parent=$this})) -MemberType NoteProperty
         }
         $this.($name).Value = $value
     }
@@ -1306,6 +1305,42 @@ class ClassType : TypeBase {
             {
                 $this.($prop.Name)._clear_duplicates()
             }
+        }
+    }
+
+    [System.Collections.ArrayList] find_matching($criteria)
+    {
+        $output = [System.Collections.ArrayList]::new()
+        foreach ($entry in $this.Properties())
+        {
+            if ($this.($entry.Name).select_entry($criteria) -eq $true)
+            {
+                $output.Add($this.($entry.Name))
+            }
+        }
+        return $output
+    }
+
+    [System.Collections.ArrayList] find_all_matching($criteria)
+    {
+        $output = [System.Collections.ArrayList]::new()
+        $this._find_all_matching($criteria, $output)
+        return $output
+    }
+
+    [void] _find_all_matching($criteria, $output)
+    {
+        foreach ($entry in $this.Properties())
+        {
+            if ($this.($entry.Name) -is [FieldType])
+            {
+                continue
+            }
+            if ($this.($entry.Name).select_entry($criteria) -eq $true)
+            {
+                $output.Add($this.($entry.Name))
+            }
+            $this.($entry.Name)._find_all_matching($criteria, $output)
         }
     }
 
@@ -1936,6 +1971,29 @@ class ArrayType : TypeBase
         return $output
     }
 
+    [System.Collections.ArrayList] find_all_matching($criteria)
+    {
+        $output = [System.Collections.ArrayList]::new()
+        $this._find_all_matching($criteria, $output)
+        return $output
+    }
+
+    [void] _find_all_matching($criteria, $output)
+    {
+        foreach ($entry in $this._entries)
+        {
+            if ($entry -is [FieldType])
+            {
+                continue
+            }
+            if ($entry.select_entry($criteria) -eq $true)
+            {
+                $output.Add($entry)
+            }
+            $entry._find_all_matching($criteria, $output)
+        }
+    }
+
     [object] select_entry($criteria)
     {
         $criteria = $criteria.Replace('.parent', '._parent._parent')
@@ -2163,3 +2221,5 @@ class SystemConfiguration : RootClassType {
 
 #$s.iDRAC.Users.find_matching('$this.Privilege.Value -eq "511"') | select UserName
 #$s.iDRAC.Users.find_matching('$this.UserName.Value -match "vaidees"') | select UserName
+#$sysconfig.select_entry('$this.iDRAC._attribs.FQDD -eq "iDRAC.Embedded.1"')
+#$sysconfig.find_all_matching('$this.UserName.Value -match "vv"')

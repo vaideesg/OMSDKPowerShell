@@ -102,7 +102,7 @@ class SCPParser
                     $subentry = $parent.find_or_create()
                 }
 
-                foreach ($attr in $child.attrib)
+                foreach ($attr in $child.Attributes)
                 {
                     $subentry.add_attribute($attr, $child.attrib[$attr])
                 }
@@ -123,8 +123,8 @@ class SCPParser
                 # plain attribute
                 if ( -not ($entry.Properties() | where { $_.Name -eq $attrname }) )
                 {
+                    $entry.__setattr__($attrname, [StringField]::new($attrname, $child.InnerText))
                     #write-host ("Not found: {0}" -f $attrname)
-                    $entry.__setattr__($attrname, [StringField]::new($child.InnerText, @{Parent=$entry}))
                     #write-host($attrname + ' not found in ' + $entry.GetType())
                     #write-host("Ensure the attribute registry is updated.")
                     continue
@@ -171,7 +171,7 @@ class SCPParser
                 
                 if (-not ($subentry.Properties() | where { $_.Name -eq $field }))
                 {
-                    $subentry.__setattr__($field, [StringField]::new($child.InnerText, @{Parent=$subentry}))
+                    $subentry.__setattr__($field, [StringField]::new($field, $child.InnerText))
                     write-host($field+' not found in '+ $subentry.getType())
                     write-host("Ensure the attribute registry is updated.")
                     continue
