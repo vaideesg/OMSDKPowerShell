@@ -142,6 +142,42 @@ class TypeBase {
 
 }
 
+class ExpressionEntry 
+{
+    $RuleName
+    $RulePreReq
+    $RuleCondition
+    $ValueExpr
+    ExpressionEntry($name, $prereq, $condition, $valueexpr)
+    {
+        $this.RuleName = $name
+        $this.RulePreReq = $prereq
+        $this.RuleCondition = $condition
+        $this.ValueExpr = $valueexpr
+    }
+
+    [string] ToString()
+    {
+        return ($this.RuleName + ": " + $this.RulePreReq + " -and " + $this.RuleCondition)
+    }
+}
+
+class ExpressionResult
+{
+    $RuleName
+    $Value
+    $Result
+    $Rule
+    ExpressionResult($rule, $value, $result)
+    {
+        $this.RuleName = $rule.RuleName
+        $this.Rule = $rule
+        $this.Value = $value
+        $this.Result = $result
+    }
+}
+
+
 class EnumType
 {
     hidden [string]$Name
@@ -784,28 +820,28 @@ class ListField : FieldType {
 }
 
 class IntRangeField : IntField {
-    hidden [int]$max
-    hidden [int]$min
-    IntRangeField($value, $properties) :
+    hidden [long]$max
+    hidden [long]$min
+    IntRangeField($min, $max, $value,$properties) :
         base($value, $properties)
     {
-        $this.min = $properties.Min
-        if ($properties.Min -eq $null)
+        $this.min = $min
+        if ($min -eq $null)
         {
             $this.min = [int]::MinValue
         }
         else
         {
-            $this.min = [int]$properties.min
+            $this.min = [long]$min
         }
-        $this.max = $properties.Max
-        if ($properties.Max -eq $null)
+        $this.max = $max
+        if ($max -eq $null)
         {
             $this.max = [int]::MaxValue
         }
         else
         {
-            $this.max = [int]$properties.max
+            $this.max = [long]$max
         }
     }
 
@@ -956,7 +992,7 @@ class WWPNAddressField : AddressTypeField {
 }
 class IPv6AddressField : AddressTypeField {
     IPv6AddressField($value, $properties) :
-        base([string], [AddressTypes]::IPv6Address, $value, $properties)
+        base([AddressTypes]::IPv6Address, $value, $properties)
     {
     }
 }
@@ -1062,13 +1098,13 @@ class ClassType : TypeBase {
         return $this._state -in @([TypeState]::UnInitialized, [TypeState]::Initializing, [TypeState]::Precommit, [TypeState]::Changing)
     }
 
-    [void] add_valid_expression($name, $expression)
+    [void] add_valid_expression($name, $expression, $value_expr)
     {
-        $this.add_valid_expression($name, '$true', $expression)
+        $this.add_valid_expression($name, '$true', $expression, $value_expr)
     }
-    [void] add_valid_expression($name, $prelim, $expression)
+    [void] add_valid_expression($name, $prelim, $expression, $value_expr)
     {
-        $this._valid_exprs.Add(@{$name = @{ PrelimCondition = $prelim; Expression =$expression }})
+        $this._valid_exprs.Add([ExpressionEntry]::new($name, $prelim, $expression, $value_expr))
     }
 
     [bool] is_valid()
@@ -1123,22 +1159,20 @@ class ClassType : TypeBase {
         $returnValue = $True
         foreach ($valid_expr in $this._valid_exprs)
         {  
-            foreach ($expr in $valid_expr.Keys)
+            $result = Invoke-Expression $valid_expr.rulePreReq
+            if ($result -eq $False)
             {
-                $result = Invoke-Expression $valid_expr[$expr]['PrelimCondition']
-                if ($result -eq $False)
+                continue
+            }
+            $result = Invoke-Expression $valid_expr.RuleCondition
+            if ($result -eq $False)
+            {
+                $returnValue = $False
+                $value = Invoke-Expression $valid_expr.ValueExpr
+                $errors.Add([ExpressionResult]::new($valid_expr, $value, $result))
+                if ($scope -eq 'One')
                 {
-                    continue
-                }
-                $result = Invoke-Expression $valid_expr[$expr]['Expression']
-                if ($result -eq $False)
-                {
-                    $returnValue = $False
-                    $errors.Add(@{ $expr = $valid_expr[$expr] })
-                    if ($scope -eq 'One')
-                    {
-                        return $returnValue
-                    }
+                    return $returnValue
                 }
             }
         }
@@ -1517,7 +1551,6 @@ class ArrayType : TypeBase
             }
         }
 
-        write-host($dest.count)
         foreach ($i in $toremove)
         {
             $dest.remove($i)
@@ -2131,9 +2164,9 @@ class BIOS : ClassType {
             BiosBootSeq  = [StringField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
             MemTest   = [StringField]::new($null, @{ Readonly = $True; Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
         })
-        $this.add_valid_expression("BiosValidRule", '$this.BootMode.Value -eq "Bios"', '-not $this.BiosBootSeq.isNullOrEmpty()') 
-        $this.add_valid_expression("UefiValidRule", '$this.BootMode.Value -eq "Uefi"', '-not $this.UefiBootSeq.isNullOrEmpty()') 
-        $this.add_valid_expression("BootModeValidRule", '-not $this.BootMode.isNullOrEmpty()') 
+        $this.add_valid_expression("BiosValidRule", '$this.BootMode.Value -eq "Bios"', '-not $this.BiosBootSeq.isNullOrEmpty()', '$this.BiosBootSeq.Value') 
+        $this.add_valid_expression("UefiValidRule", '$this.BootMode.Value -eq "Uefi"', '-not $this.UefiBootSeq.isNullOrEmpty()', '"<" + $this.UefiBootSeq.Value + ">"') 
+        $this.add_valid_expression("BootModeValidRule", '-not $this.BootMode.isNullOrEmpty()', '$this.BootMode.Value') 
         $this.commit($properties.LoadingFromSCP)
     }
 }

@@ -47,9 +47,8 @@ class SCPParser
         }
     }
 
-    [object] _get_entry($comp_fqdd, $sysconfig)
+    hidden [object] _get_entry($comp_fqdd, $sysconfig)
     {
-        write-host ">$comp_fqdd<"
         foreach ($i in (Get-Member -MemberType NoteProperty -InputObject $this.config_spec))
         {
             $entry = $this.config_spec.($i.Name)
@@ -61,7 +60,7 @@ class SCPParser
                 {
                     if ($sysconfig.Properties() | where { $_.Name -eq $i.Name })
                     {
-                        write-host ("=======Found Match {0} => {1}" -f $comp_fqdd, $i.Name)
+                        #write-host ("=======Found Match {0} => {1}" -f $comp_fqdd, $i.Name)
                         return $sysconfig.($i.Name)
                     }
                 }
@@ -70,7 +69,7 @@ class SCPParser
         return $null
     }
 
-    [void] _load_child($node, $entry)
+    hidden [void] _load_child($node, $entry)
     {
         foreach ($child in $node.ChildNodes)
         {
@@ -91,7 +90,7 @@ class SCPParser
                 $subnode = $this._get_entry($child.FQDD, $entry)
                 if ($subnode -eq $null)
                 {
-                    write-host('No component spec found for ' + $child.FQDD)
+                    #write-host('No component spec found for ' + $child.FQDD)
                     continue
                 }
                 $parent = $null
@@ -114,7 +113,7 @@ class SCPParser
             $attrname = $child.Name
             if ($attrname -eq $null)
             {
-                write-host("ERROR: No attribute found!!")
+                #write-host("ERROR: No attribute found!!")
                 continue
             }
     
@@ -147,7 +146,7 @@ class SCPParser
             $match = $attrname -split '(.*)\.([0-9]+)#(.*)'
             if ($match.Count -ne 5)
             {
-                write-host($attrname + ' not good ')
+                #write-host($attrname + ' not good ')
                 continue
             }
     
@@ -172,8 +171,8 @@ class SCPParser
                 if (-not ($subentry.Properties() | where { $_.Name -eq $field }))
                 {
                     $subentry.__setattr__($field, [StringField]::new($field, $child.InnerText))
-                    write-host($field+' not found in '+ $subentry.getType())
-                    write-host("Ensure the attribute registry is updated.")
+                    #write-host($field+' not found in '+ $subentry.getType())
+                    #write-host("Ensure the attribute registry is updated.")
                     continue
                 }
                
@@ -195,7 +194,7 @@ class SCPParser
     }
     
 
-    [void] _load_scp($node, $sysconfig)
+    hidden [void] _load_scp($node, $sysconfig)
     {
         if (($sysconfig._alias -ne $null) -and $node.tag -ne $sysconfig._alias)
         {
@@ -209,14 +208,13 @@ class SCPParser
         {
             if ($subnode.NodeType -eq 'Comment') 
             {
-                write-host ($subnode.InnerText)
                 continue
             }
             # Component!
             $entry = $this._get_entry($subnode.FQDD, $sysconfig)
             if ($entry -eq $null)
             {
-                write-host('No component spec found for ' + $subnode.FQDD)
+                #write-host('No component spec found for ' + $subnode.FQDD)
                 continue
             }
             $parent = $null
