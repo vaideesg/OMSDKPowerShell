@@ -1,5 +1,4 @@
-﻿cd C:\Users\vaideeswaran_ganesan\Work\OMSDKPowerShell
-
+﻿
 Import-Module .\TypeMgr\TypeManager.ps1
 Import-Module .\TypeMgr\Parser.ps1
 

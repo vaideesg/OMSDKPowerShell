@@ -29,6 +29,7 @@ enum TypeState {
 }
 cd C:\Users\vaideeswaran_ganesan\work\OMSDKPowerShell
 
+
 class TypeBase {
     hidden $_orig_value = $null
     hidden $_default = $null
@@ -196,6 +197,8 @@ class EnumType
     }
 }
 
+
+
 class TypeHelper
 {
     static [bool] is_enum($type)
@@ -220,9 +223,11 @@ class FieldType : TypeBase, System.Icomparable
     # 2. How to freeze and unfreeze objects for accidental modification?
     # 3. Comparision Operations - [Workaround: Added CompareTo() and __xx__() APIs]
 
-    FieldType($type, $init_value, $properties)
+    hidden $enumtype
+    FieldType($type, $enumtype, $init_value, $properties)
     {
         $this._type = $type
+        $this.enumtype = $enumtype
         $this._value = $(Add-Member -InputObject $this -MemberType ScriptProperty -TypeName $type -Name 'Value' -Value {
              $this._value
         } -SecondValue {
@@ -799,21 +804,21 @@ class FieldType : TypeBase, System.Icomparable
 
 class IntField : FieldType {
     IntField($value, $properties) :
-        base([int], $value, $properties)
+        base([int], $null, $value, $properties)
     {
     }
 }
 
 class BooleanField : FieldType {
     BooleanField($value, $properties) :
-        base([bool], $value, $properties)
+        base([bool], $null, $value, $properties)
     {
     }
 }
 
 class ListField : FieldType {
     ListField($value, $properties) :
-        base([string], $value, $properties)
+        base([string], $null, $value, $properties)
     {
         $this._list = $True
     }
@@ -886,7 +891,7 @@ class PortField : IntField {
 
 class StringField : FieldType {
     StringField($value, $properties) :
-        base([string], $value, $properties)
+        base([string], $null, $value, $properties)
     {
     }
 }
@@ -955,7 +960,7 @@ class AddressHelpers
 class AddressTypeField : FieldType {
     hidden $type
     AddressTypeField($type, $value, $properties) :
-        base([string], $value, $properties)
+        base([string], $null, $value, $properties)
     {
         $this.type = $type
     }
@@ -999,11 +1004,9 @@ class IPv6AddressField : AddressTypeField {
 
 
 class EnumTypeField : FieldType {
-    hidden $enumType
     EnumTypeField($enumType, $value, $properties) :
-        base([EnumType], $value, $properties)
+        base([EnumType], $enumType, $value, $properties)
     {
-        $this.enumType = $enumType
     }
 }
 
@@ -1011,7 +1014,7 @@ class CompositeField : FieldType {
     hidden [object] $my
 
     CompositeField($obj, $value, $properties) :
-        base([System.Collections.ArrayList], $value, $properties)
+        base([System.Collections.ArrayList], $null, $value, $properties)
     {
         $this.my = $obj
         $this._composite = $True
@@ -2098,47 +2101,47 @@ class ArrayType : TypeBase
     }
 }
 
-
 # Generated Code
-$BootModeTypes = [EnumType]::new('BootModeTypes', @{ Uefi = "Uefi"; Bios = "Bios"; None = "None" })
+$Global:BootModeTypes = [EnumType]::new('BootModeTypes', @{ Uefi = "Uefi"; Bios = "Bios"; None = "None" })
 
-$Privilege_UsersTypes = [EnumType]::new("Privilege_UsersTypes", @{
+$Global:Privilege_UsersTypes = [EnumType]::new("Privilege_UsersTypes", @{
     "NoAccess" = "0"
     "Readonly" = "1"
     "Operator" = "499"
     "Administrator" = "511"
+    "511" = "Administrator"
 })
-$IpmiLanPrivilege_UsersTypes = [EnumType]::new("IpmiLanPrivilege_UsersTypes", @{
+$Global:IpmiLanPrivilege_UsersTypes = [EnumType]::new("IpmiLanPrivilege_UsersTypes", @{
     "Administrator" = "Administrator"
     "No_Access" = "No Access"
     "Operator" = "Operator"
     "User" = "User"
 })
-$IpmiSerialPrivilege_UsersTypes = [EnumType]::new("IpmiSerialPrivilege_UsersTypes", @{
+$Global:IpmiSerialPrivilege_UsersTypes = [EnumType]::new("IpmiSerialPrivilege_UsersTypes", @{
     "Administrator" = "Administrator"
     "No_Access" = "No Access"
     "Operator" = "Operator"
     "User" = "User"
 })
-$ProtocolEnable_UsersTypes = [EnumType]::new("ProtocolEnable_UsersTypes", @{
+$Global:ProtocolEnable_UsersTypes = [EnumType]::new("ProtocolEnable_UsersTypes", @{
     "Disabled" = "Disabled"
     "Enabled" = "Enabled"
 })
-$AuthenticationProtocol_UsersTypes = [EnumType]::new("AuthenticationProtocol_UsersTypes", @{
+$Global:AuthenticationProtocol_UsersTypes = [EnumType]::new("AuthenticationProtocol_UsersTypes", @{
     "MD5" = "MD5"
     "SHA" = "SHA"
     "T_None" = "None"
 })
-$Enable_UsersTypes = [EnumType]::new("Enable_UsersTypes", @{
+$Global:Enable_UsersTypes = [EnumType]::new("Enable_UsersTypes", @{
     "Disabled" = "Disabled"
     "Enabled" = "Enabled"
 })
-$PrivacyProtocol_UsersTypes = [EnumType]::new("PrivacyProtocol_UsersTypes", @{
+$Global:PrivacyProtocol_UsersTypes = [EnumType]::new("PrivacyProtocol_UsersTypes", @{
     "AES" = "AES"
     "DES" = "DES"
     "T_None" = "None"
 })
-$SolEnable_UsersTypes = [EnumType]::new("SolEnable_UsersTypes", @{
+$Global:SolEnable_UsersTypes = [EnumType]::new("SolEnable_UsersTypes", @{
     "Disabled" = "Disabled"
     "Enabled" = "Enabled"
 })
@@ -2179,7 +2182,7 @@ class Time: ClassType {
             TimeZoneAbbreviation_Time = [StringField]::new("", @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
             TimeZoneOffset_Time = [IntField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
             Time_Time = [IntField]::new($null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
-            Timezone_Time = [EnumTypeField]::new($Global:TimeZones, $null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
+            #Timezone_Time = [EnumTypeField]::new($Global:TimeZones, $null, @{Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
             Timezones = [CompositeField]::new($this, 
                 [System.Collections.ArrayList]('DayLightOffset_Time', 'Time_Time', 'Timezone_Time'), @{Readonly=$true; Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP   })
         })
@@ -2196,14 +2199,14 @@ class Users : ClassType
     Users($properties) : base($properties)
     {
         $this.__addattr__(@{
-            AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this; LoadingFromSCP = $properties.LoadingFromSCP })
+            #AuthenticationProtocol = [EnumTypeField]::new($Global:AuthenticationProtocol_UsersTypes, $null, @{ Parent = $this; LoadingFromSCP = $properties.LoadingFromSCP })
             # readonly attribute populated by iDRAC
             ETAG = [StringField]::new("", @{ Parent=$this; ReadOnly = $True; LoadingFromSCP = $properties.LoadingFromSCP  })
-            Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
-            IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
-            IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            #Enable = [EnumTypeField]::new($Global:Enable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            #IpmiLanPrivilege = [EnumTypeField]::new($Global:IpmiLanPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            #IpmiSerialPrivilege = [EnumTypeField]::new($Global:IpmiSerialPrivilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
             Password = [StringField]::new("", @{ Parent=$this; LoadingFromSCP = $properties.LoadingFromSCP  })
-            PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
+            #PrivacyProtocol = [EnumTypeField]::new($Global:PrivacyProtocol_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
             Privilege = [EnumTypeField]::new($Global:Privilege_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
             ProtocolEnable = [EnumTypeField]::new($Global:ProtocolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
             SolEnable = [EnumTypeField]::new($Global:SolEnable_UsersTypes, $null, @{ Parent = $this; default_on_delete='Disabled'; LoadingFromSCP = $properties.LoadingFromSCP })
